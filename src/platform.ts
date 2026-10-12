@@ -1,14 +1,51 @@
 // Tauri API and OS window interaction wrappers
 
-import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import {
+  getCurrentWindow,
+  currentMonitor,
+  primaryMonitor,
+  availableMonitors,
+  PhysicalPosition,
+  PhysicalSize,
+  Monitor,
+} from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { Menu, MenuOptions } from "@tauri-apps/api/menu";
 import { invoke } from "@tauri-apps/api/core";
 
 export const win = getCurrentWindow();
 
-export async function getMonitor() {
+export interface WorkAreaBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scaleFactor: number;
+}
+
+export async function getMonitor(): Promise<Monitor | null> {
   return await currentMonitor();
+}
+
+export async function getPrimaryMonitor(): Promise<Monitor | null> {
+  return await primaryMonitor();
+}
+
+export async function getAllMonitors(): Promise<Monitor[]> {
+  return await availableMonitors();
+}
+
+export async function getCurrentWorkArea(): Promise<WorkAreaBounds | null> {
+  const mon = (await currentMonitor()) || (await primaryMonitor());
+  if (!mon) return null;
+  const wa = mon.workArea ?? { position: mon.position, size: mon.size };
+  return {
+    x: wa.position.x,
+    y: wa.position.y,
+    width: wa.size.width,
+    height: wa.size.height,
+    scaleFactor: mon.scaleFactor,
+  };
 }
 
 export async function getWindowPosition(): Promise<{ x: number; y: number }> {

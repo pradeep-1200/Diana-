@@ -6,6 +6,7 @@ export interface AppState {
   mode: Mode;
   visible: boolean;
   wanderEnabled: boolean;
+  wanderAllMonitors: boolean;
   dndEnabled: boolean;
   isDragging: boolean;
   lastInteraction: number;
@@ -21,6 +22,7 @@ export const state: AppState = {
   mode: "idle",
   visible: true,
   wanderEnabled: true,
+  wanderAllMonitors: false,
   dndEnabled: false,
   isDragging: false,
   lastInteraction: Date.now(),

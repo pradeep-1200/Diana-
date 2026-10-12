@@ -7,9 +7,8 @@ import { state, setVisible } from "./state";
 import { SCALE, BREAK_EVERY_MIN, TASKBAR_MARGIN, applyScale } from "./config";
 import { spriteEl, say, syncHitRects } from "./ui";
 import {
-  getMonitor,
+  getCurrentWorkArea,
   getWindowSize,
-  getScaleFactor,
   setWindowPosition,
   loadLocalPosition,
   onTrayAction,
@@ -70,27 +69,26 @@ setInterval(async () => {
 
 // Initial placement and greeting sequence
 async function placeInitially() {
-  const [mon, size, sf] = await Promise.all([
-    getMonitor(),
+  const [wa, size] = await Promise.all([
+    getCurrentWorkArea(),
     getWindowSize(),
-    getScaleFactor(),
   ]);
-  if (!mon) return;
+  if (!wa) return;
 
   const saved = loadLocalPosition();
   const inside =
     saved &&
-    saved.x > mon.position.x - size.width / 2 &&
-    saved.x < mon.position.x + mon.size.width - size.width / 2 &&
-    saved.y > mon.position.y &&
-    saved.y < mon.position.y + mon.size.height - size.height / 2;
+    saved.x >= wa.x - size.width / 2 &&
+    saved.x <= wa.x + wa.width - size.width / 2 &&
+    saved.y >= wa.y &&
+    saved.y <= wa.y + wa.height - size.height;
 
   const x = inside
     ? saved!.x
-    : mon.position.x + mon.size.width - size.width - 40 * sf;
+    : wa.x + wa.width - size.width - Math.round(40 * wa.scaleFactor);
   const y = inside
     ? saved!.y
-    : mon.position.y + mon.size.height - size.height - TASKBAR_MARGIN * sf;
+    : wa.y + wa.height - size.height;
 
   await setWindowPosition(x, y);
 }

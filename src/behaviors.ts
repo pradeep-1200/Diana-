@@ -6,7 +6,13 @@ import { Brain, EMOTION_CLIPS } from "./brain";
 import { state, setMode, nextWalkToken, recordInteraction, Mode } from "./state";
 import { SCALE, WALK_SPEED } from "./config";
 import { fx, emote, say } from "./ui";
-import { getMonitor, getWindowPosition, getWindowSize, getScaleFactor, setWindowPosition } from "./platform";
+import {
+  getCurrentWorkArea,
+  getAllMonitors,
+  getWindowPosition,
+  getWindowSize,
+  setWindowPosition,
+} from "./platform";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -132,20 +138,31 @@ export class Behaviors {
   wander = async () => {
     if (!state.wanderEnabled) return;
     const token = nextWalkToken();
-    const mon = await getMonitor();
-    if (!mon || token !== state.walkToken) return;
-    const [pos, size, sf] = await Promise.all([
+    const wa = await getCurrentWorkArea();
+    if (!wa || token !== state.walkToken) return;
+    const [pos, size] = await Promise.all([
       getWindowPosition(),
       getWindowSize(),
-      getScaleFactor(),
     ]);
 
-    const pad = (size.width - 192 * SCALE * sf) / 2; // empty window margin beside the sprite
-    const minX = mon.position.x - pad;
-    const maxX = mon.position.x + mon.size.width - size.width + pad;
+    const pad = (size.width - 192 * SCALE * wa.scaleFactor) / 2; // empty window margin beside the sprite
+    let minX = wa.x - pad;
+    let maxX = wa.x + wa.width - size.width + pad;
+
+    if (state.wanderAllMonitors) {
+      const all = await getAllMonitors();
+      if (all.length > 1) {
+        for (const m of all) {
+          const mWa = m.workArea ?? { position: m.position, size: m.size };
+          minX = Math.min(minX, mWa.position.x - pad);
+          maxX = Math.max(maxX, mWa.position.x + mWa.size.width - size.width + pad);
+        }
+      }
+    }
+
     const dir = Math.random() < 0.5 ? -1 : 1;
-    const target = Math.max(minX, Math.min(maxX, pos.x + dir * rand(150, 550) * sf));
-    if (Math.abs(target - pos.x) < 60 * sf) return;
+    const target = Math.max(minX, Math.min(maxX, pos.x + dir * rand(150, 550) * wa.scaleFactor));
+    if (Math.abs(target - pos.x) < 60 * wa.scaleFactor) return;
     const d = target > pos.x ? 1 : -1;
 
     setMode("walking");
@@ -156,7 +173,7 @@ export class Behaviors {
       await sleep(33);
       if (token !== state.walkToken) return;
       const now = performance.now();
-      x += d * WALK_SPEED * sf * ((now - last) / 1000);
+      x += d * WALK_SPEED * wa.scaleFactor * ((now - last) / 1000);
       last = now;
       if ((d > 0 && x > target) || (d < 0 && x < target)) x = target;
       await setWindowPosition(x, pos.y);
