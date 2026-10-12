@@ -17,6 +17,8 @@ import {
   setDragState,
 } from "./platform";
 
+import { ActivityMonitor } from "./activity";
+
 export class InputHandler {
   private down: { x: number; y: number } | null = null;
   private dragging = false;
@@ -28,7 +30,8 @@ export class InputHandler {
     private anim: Animator,
     private mood: Mood,
     private behaviors: Behaviors,
-    private brain: Brain
+    private brain: Brain,
+    private activityMonitor: ActivityMonitor
   ) {
     this.bindPointer();
     this.bindHover();
@@ -231,6 +234,11 @@ export class InputHandler {
           },
         },
         { id: "feel", text: "How is she feeling?", action: () => this.showStats() },
+        {
+          id: "dnd",
+          text: state.dndEnabled ? "Disable Do Not Disturb" : "Do Not Disturb (silent & hidden)",
+          action: () => this.activityMonitor.toggleDnd(),
+        },
         { item: "Separator" as const },
         { id: "hide", text: "Hide (bring back from tray)", action: () => this.hidePet() },
         {

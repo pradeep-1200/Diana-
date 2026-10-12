@@ -151,3 +151,25 @@ export async function setDragState(dragging: boolean): Promise<void> {
   }
 }
 
+export async function getUserIdleMs(): Promise<number> {
+  try {
+    return await invoke<number>("get_user_idle_ms");
+  } catch {
+    return 0;
+  }
+}
+
+export interface FullscreenAndPower {
+  is_fullscreen: boolean;
+  is_charging: boolean;
+  battery_percent: number | null;
+}
+
+export async function getFullscreenAndPower(): Promise<FullscreenAndPower> {
+  try {
+    return await invoke<FullscreenAndPower>("get_fullscreen_and_power");
+  } catch {
+    return { is_fullscreen: false, is_charging: true, battery_percent: null };
+  }
+}
+

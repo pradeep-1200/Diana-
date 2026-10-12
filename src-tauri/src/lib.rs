@@ -1,5 +1,7 @@
+mod activity;
 mod hittest;
 
+use activity::{get_fullscreen_and_power, get_system_activity, get_user_idle_ms};
 use hittest::{set_drag_state, update_hit_rects, HitTester};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -31,15 +33,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             update_hit_rects,
             set_drag_state,
+            get_user_idle_ms,
+            get_fullscreen_and_power,
+            get_system_activity,
         ])
         .setup(|app| {
             let ht = app.state::<HitTester>();
             ht.start_thread(app.handle().clone());
             let toggle = MenuItem::with_id(app, "toggle", "Show / Hide Diana", true, None::<&str>)?;
+            let dnd = MenuItem::with_id(app, "dnd", "Do Not Disturb", true, None::<&str>)?;
             let dance = MenuItem::with_id(app, "dance", "Dance", true, None::<&str>)?;
             let sleep = MenuItem::with_id(app, "sleep", "Nap / Wake", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle, &dance, &sleep, &quit])?;
+            let menu = Menu::with_items(app, &[&toggle, &dnd, &dance, &sleep, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())

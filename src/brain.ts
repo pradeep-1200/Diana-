@@ -101,6 +101,10 @@ export class ScriptedBrain implements Brain {
       case "lateNight": return { key: "lateNight", emotion: "curious" };
       case "returnShort": return { key: "returnShort", emotion: "happy" };
       case "returnLong": return { key: "returnLong", emotion: "happy" };
+      case "welcomeBack": return { key: "welcomeBack", emotion: "happy" };
+      case "lowBattery": return { key: "lowBattery", emotion: "annoyed" };
+      case "pluggedIn": return { key: "pluggedIn", emotion: "excited" };
+      case "unplugged": return { key: "unplugged", emotion: "curious" };
       case "ponder": return { key: "thoughtContent", emotion: "curious" };
       case "thought": {
         switch (ctx.moodLabel) {

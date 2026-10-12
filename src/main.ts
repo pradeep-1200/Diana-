@@ -15,6 +15,8 @@ import {
   onPetVisible,
 } from "./platform";
 
+import { ActivityMonitor } from "./activity";
+
 // Initialize styling
 applyScale(SCALE);
 
@@ -23,12 +25,14 @@ const anim = new Animator(spriteEl);
 const mood = new Mood();
 const brain = new ScriptedBrain();
 const behaviors = new Behaviors(anim, mood, brain);
-new InputHandler(anim, mood, behaviors, brain);
+const activityMonitor = new ActivityMonitor(anim, mood, brain, behaviors);
+new InputHandler(anim, mood, behaviors, brain, activityMonitor);
 
 // Tray event listeners from Rust
 onTrayAction((action) => {
   if (action === "dance") behaviors.doDance();
   if (action === "sleep") behaviors.toggleSleep();
+  if (action === "dnd") activityMonitor.toggleDnd();
 });
 
 onPetVisible((visible) => {
@@ -44,17 +48,7 @@ setInterval(async () => {
   if (!state.visible || state.mode !== "idle" || state.dndEnabled) return;
 
   const now = Date.now();
-  if (now - state.lastBreak > BREAK_EVERY_MIN * 60000) {
-    state.lastBreak = now;
-    const reply = await brain.respond({
-      trigger: "breakTime",
-      moodLabel: mood.label(),
-      energy: mood.s.energy,
-      hour: hour(),
-    });
-    say(reply.text, reply.emote, 5000);
-    behaviors.act("waiting", 4);
-  } else if (isLateNight() && now - state.lastLateNight > 60 * 60000) {
+  if (isLateNight() && now - state.lastLateNight > 60 * 60000) {
     state.lastLateNight = now;
     const reply = await brain.respond({
       trigger: "lateNight",
@@ -66,6 +60,8 @@ setInterval(async () => {
     behaviors.act("thinking", 3);
   }
 }, 60000);
+
+activityMonitor.start();
 
 // Initial placement and greeting sequence
 async function placeInitially() {

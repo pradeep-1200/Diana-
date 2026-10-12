@@ -44,6 +44,10 @@ export const LINES: Record<string, Line[]> = {
   hover: [L("Oh? You're looking at me.", "👀"), L("Hm?", "❓"), L("...?", "❓")],
   breakTime: [L("You've been working a long time. Stretch with me?", "💧"), L("Water break! Please?", "💧"), L("Rest your eyes for a moment.", "👀")],
   lateNight: [L("It's past midnight... please get some sleep.", "💤"), L("Even I'm getting sleepy. You should rest too.")],
+  lowBattery: [L("Battery is running low... please plug in soon!", "⚡"), L("Down under 20%! I need my charger...", "💧"), L("Low power warning! Let's find an outlet.", "🔋")],
+  pluggedIn: [L("Plugged in! Full energy coming up~", "⚡"), L("Charging! We have all the power we need now.", "✨")],
+  unplugged: [L("Unplugged! Running on battery now.", "🔋"), L("On battery power! I'll keep an eye on it.", "👀")],
+  welcomeBack: [L("Welcome back! I was waiting for you.", "✨"), L("You're back! Ready to get to work?", "👋"), L("Oh! You're back! Welcome~", "❤")],
 };
 
 const lastUsed = new Map<string, number>();
