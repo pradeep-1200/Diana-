@@ -25,6 +25,7 @@ import {
   onSettingWalkSpeed,
   onSettingUsername,
   onMemoryReset,
+  logDecision,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
@@ -139,6 +140,7 @@ async function placeInitially() {
 }
 
 async function start() {
+  logDecision("main.ts start() begin");
   await placeInitially();
   anim.play("idle");
 
@@ -147,6 +149,7 @@ async function start() {
   await dbLogEvent("session_start");
 
   const settings = await dbGetAllSettings();
+  logDecision(`main.ts settings loaded: ${JSON.stringify(settings)}`);
   if (settings["scale"]) {
     const s = parseFloat(settings["scale"]);
     if (!isNaN(s) && s > 0) applyScale(s);
@@ -166,7 +169,9 @@ async function start() {
 
   // 2. Onboarding: Check user name fact
   const nameFact = await dbGetFact("user_name");
+  logDecision(`main.ts nameFact: ${nameFact ? nameFact.value : "null"}`);
   if (!nameFact || !nameFact.value.trim()) {
+    logDecision("main.ts displaying onboarding input prompt");
     await sleep(400);
     // Explicitly focus window for typing
     await focusWindow();
@@ -174,6 +179,7 @@ async function start() {
       "Hi! What should I call you?",
       "Your name...",
       async (name) => {
+        logDecision(`main.ts onboarding submitted name="${name}"`);
         if (name) {
           await dbSetFact("user_name", name, "onboarding");
           brain.setUserName(name);
@@ -183,15 +189,18 @@ async function start() {
         }
         behaviors.act("cozy", 2);
         (document.activeElement as HTMLElement)?.blur();
-        behaviors.scheduleDecide();
+        behaviors.scheduleDecide("onboarding_submit");
       },
       () => {
+        logDecision("main.ts onboarding skipped");
         say("No problem! Let's be friends anyway~ ✨");
         behaviors.act("cozy", 2);
         (document.activeElement as HTMLElement)?.blur();
-        behaviors.scheduleDecide();
+        behaviors.scheduleDecide("onboarding_skip");
       }
     );
+    // CRITICAL: Also arm the decision loop in the background so Diana is NOT frozen if user doesn't type!
+    behaviors.scheduleDecide("onboarding_initial_background");
     return;
   }
 
@@ -201,6 +210,7 @@ async function start() {
 
   // 3. Stats Summary: streaks & active hour pattern
   const stats = await dbGetStatsSummary();
+  logDecision(`main.ts stats: streaks=${stats.streak_days}, pets=${stats.total_pets}, hours=${JSON.stringify(stats.top_active_hours)}`);
   const h = hour();
   const away = mood.awayMinutes;
   const greetingTrigger =
@@ -215,7 +225,7 @@ async function start() {
   });
 
   let text = reply.text;
-  if (stats.top_active_hours.includes(h) && Math.random() < 0.4) {
+  if (stats.top_active_hours && stats.top_active_hours.includes(h) && Math.random() < 0.4) {
     text += " You're usually up around this time!";
   } else if (stats.streak_days >= 7 && Math.random() < 0.35) {
     text += ` Day ${stats.streak_days} in a row!`;
@@ -223,7 +233,7 @@ async function start() {
 
   say(text, reply.emote, reply.durationMs);
   behaviors.act("cozy", 2);
-  behaviors.scheduleDecide();
+  behaviors.scheduleDecide("startup_greeting");
 }
 
 window.addEventListener("beforeunload", () => {

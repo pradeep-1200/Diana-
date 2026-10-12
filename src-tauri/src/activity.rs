@@ -4,7 +4,7 @@ use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 #[cfg(windows)]
 use windows::Win32::UI::Shell::{
-    SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+    SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 
 #[cfg(windows)]
@@ -52,7 +52,7 @@ pub fn get_fullscreen_and_power() -> FullscreenAndPower {
         let is_fullscreen = match unsafe { SHQueryUserNotificationState() } {
             Ok(state) => matches!(
                 state,
-                QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE
+                QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE
             ),
             Err(_) => false,
         };

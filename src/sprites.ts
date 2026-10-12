@@ -48,6 +48,7 @@ export class Animator {
 
   play(name: ClipName, opts: PlayOpts = {}) {
     window.clearTimeout(this.timer);
+    this.paused = false;
     this.name = name;
     this.clip = CLIPS[name];
     this.idx = 0;

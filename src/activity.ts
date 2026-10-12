@@ -1,6 +1,6 @@
 // Windows OS activity monitor: idle detection, fullscreen suspension, battery tracking, and breaks
 
-import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast } from "./platform";
+import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast, logDecision } from "./platform";
 import { state, setDndEnabled } from "./state";
 import { BREAK_EVERY_MIN } from "./config";
 import { Animator } from "./sprites";
@@ -154,6 +154,7 @@ export class ActivityMonitor {
     // 1. Fullscreen handling (Amendment 3)
     if (data.is_fullscreen) {
       if (!this.hiddenDueToFullscreen) {
+        logDecision("ActivityMonitor: entering D3D fullscreen / presentation -> hiding window and pausing");
         this.hiddenDueToFullscreen = true;
         this.anim.pause();
         await hideWindow();
@@ -161,6 +162,7 @@ export class ActivityMonitor {
       return; // Do not process battery or timers while fullscreen
     } else if (this.hiddenDueToFullscreen) {
       // Exited fullscreen -> restore window
+      logDecision("ActivityMonitor: exited fullscreen -> restoring window and resuming animation");
       this.hiddenDueToFullscreen = false;
       await showWindow();
       this.anim.resume();

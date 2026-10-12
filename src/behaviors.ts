@@ -12,6 +12,7 @@ import {
   getWindowPosition,
   getWindowSize,
   setWindowPosition,
+  logDecision,
 } from "./platform";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -29,12 +30,15 @@ export class Behaviors {
   ) {}
 
   toIdle = () => {
+    logDecision(`toIdle() transitioning mode ${state.mode} -> idle`);
     setMode("idle");
     this.anim.play("idle");
+    this.scheduleDecide("toIdle");
   };
 
   act(name: ClipName, loops: number, newMode: Mode = "busy") {
     nextWalkToken();
+    logDecision(`act(${name}, loops=${loops}, newMode=${newMode}) from mode=${state.mode}`);
     setMode(newMode);
     this.anim.play(name, { loops, onDone: this.toIdle });
   }
@@ -169,34 +173,52 @@ export class Behaviors {
     this.anim.play(d > 0 ? "walkRight" : "walkLeft");
     let x = pos.x;
     let last = performance.now();
-    while (token === state.walkToken && Math.abs(target - x) > 2) {
-      await sleep(33);
-      if (token !== state.walkToken) return;
-      const now = performance.now();
-      x += d * WALK_SPEED * wa.scaleFactor * ((now - last) / 1000);
-      last = now;
-      if ((d > 0 && x > target) || (d < 0 && x < target)) x = target;
-      await setWindowPosition(x, pos.y);
+    try {
+      while (token === state.walkToken && Math.abs(target - x) > 2) {
+        await sleep(33);
+        if (token !== state.walkToken) break;
+        const now = performance.now();
+        x += d * WALK_SPEED * wa.scaleFactor * ((now - last) / 1000);
+        last = now;
+        if ((d > 0 && x > target) || (d < 0 && x < target)) x = target;
+        await setWindowPosition(x, pos.y);
+      }
+    } catch (err) {
+      logDecision(`wander error: ${err}`);
+    } finally {
+      if (token === state.walkToken || state.mode === "walking") {
+        this.toIdle();
+      }
     }
-    if (token === state.walkToken) this.toIdle();
   };
 
-  scheduleDecide() {
+  scheduleDecide(caller = "unknown") {
     window.clearTimeout(decideTimer);
-    decideTimer = window.setTimeout(
-      () => this.decide(),
-      state.mode === "sleeping" ? rand(9000, 16000) : rand(6000, 16000)
-    );
+    const delay = Math.round(state.mode === "sleeping" ? rand(9000, 16000) : rand(6000, 16000));
+    logDecision(`scheduleDecide(caller=${caller}) armed next decide in ${delay}ms (mode=${state.mode}, visible=${state.visible}, dnd=${state.dndEnabled})`);
+    decideTimer = window.setTimeout(() => this.decide(), delay);
   }
 
   decide = async () => {
-    this.scheduleDecide();
-    if (!state.visible || state.dndEnabled) return;
+    logDecision(`decide() tick started. mode=${state.mode}, visible=${state.visible}, dnd=${state.dndEnabled}`);
+    this.scheduleDecide("decide");
+    if (!state.visible) {
+      logDecision("decide() skipped: state.visible is false");
+      return;
+    }
+    if (state.dndEnabled) {
+      logDecision("decide() skipped: state.dndEnabled is true");
+      return;
+    }
     const m = this.mood.s;
     const idleFor = Date.now() - state.lastInteraction;
 
     if (state.mode === "sleeping") {
-      if (m.energy >= 90 && !isLateNight()) return this.wakeUp(true);
+      logDecision(`decide() mode=sleeping, energy=${m.energy.toFixed(1)}, idleFor=${(idleFor/1000).toFixed(0)}s`);
+      if (m.energy >= 90 && !isLateNight()) {
+        logDecision("decide() waking up from sleep naturally");
+        return this.wakeUp(true);
+      }
       emote("💤");
       if (Math.random() < 0.25) {
         const reply = await this.brain.respond({
@@ -209,28 +231,45 @@ export class Behaviors {
       }
       return;
     }
-    if (state.mode !== "idle") return;
+
+    if (state.mode !== "idle") {
+      const now = Date.now();
+      const inCurrentMode = now - (state.lastModeChange || now);
+      if (inCurrentMode > 10000 && state.mode !== "carried") {
+        logDecision(`decide() recovering stuck mode "${state.mode}" (${(inCurrentMode/1000).toFixed(1)}s in mode) -> resetting to idle`);
+        this.toIdle();
+      } else {
+        logDecision(`decide() skipped: mode is "${state.mode}" (not idle, ${(inCurrentMode/1000).toFixed(1)}s in mode)`);
+        return;
+      }
+    }
 
     const tired =
       m.energy < 15 ||
       (isLateNight() && idleFor > 8 * 60000) ||
       (idleFor > 45 * 60000 && m.energy < 45);
-    if (tired) return this.startNap();
+    if (tired) {
+      logDecision(`decide() pet is tired (energy=${m.energy.toFixed(1)}, idleFor=${(idleFor/1000).toFixed(0)}s), starting nap`);
+      return this.startNap();
+    }
 
-    const options: [() => void, number][] = [
-      [() => {}, 20],
-      [() => this.thought(), 28],
-      [() => this.wander(), 12 + m.energy / 8],
-      [() => this.doDance(), 3 + (m.happiness > 65 ? 10 : 0)],
-      [() => this.ponder(), 10],
-      [() => this.seekAttention(), m.boredom > 60 ? 25 : 3],
+    const options: [{ name: string; fn: () => void }, number][] = [
+      [{ name: "idle_pause", fn: () => logDecision("decide() chose idle_pause (doing nothing)") }, 20],
+      [{ name: "thought", fn: () => { logDecision("decide() chose thought"); this.thought(); } }, 28],
+      [{ name: "wander", fn: () => { logDecision("decide() chose wander"); this.wander(); } }, 12 + m.energy / 8],
+      [{ name: "dance", fn: () => { logDecision("decide() chose dance"); this.doDance(); } }, 3 + (m.happiness > 65 ? 10 : 0)],
+      [{ name: "ponder", fn: () => { logDecision("decide() chose ponder"); this.ponder(); } }, 10],
+      [{ name: "seekAttention", fn: () => { logDecision("decide() chose seekAttention"); this.seekAttention(); } }, m.boredom > 60 ? 25 : 3],
     ];
 
     const total = options.reduce((a, [, w]) => a + w, 0);
     let r = Math.random() * total;
-    for (const [fn, w] of options) {
+    for (const [opt, w] of options) {
       r -= w;
-      if (r <= 0) return fn();
+      if (r <= 0) {
+        opt.fn();
+        return;
+      }
     }
   };
 }

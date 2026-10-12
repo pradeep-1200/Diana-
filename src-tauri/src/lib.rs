@@ -62,6 +62,26 @@ fn is_debug_fast() -> bool {
         .unwrap_or(false)
 }
 
+#[tauri::command]
+fn log_decision(entry: String) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{}] {}\n", now, entry);
+    print!("{}", line);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("decisions.log")
+    {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+        let _ = file.flush();
+    }
+}
+
 fn toggle_visibility(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let now_visible = w.is_visible().unwrap_or(true);
@@ -93,6 +113,7 @@ pub fn run() {
             set_autostart,
             set_main_always_on_top,
             is_debug_fast,
+            log_decision,
             update_hit_rects,
             set_drag_state,
             get_user_idle_ms,

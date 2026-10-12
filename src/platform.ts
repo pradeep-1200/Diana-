@@ -333,4 +333,11 @@ export async function isDebugFast(): Promise<boolean> {
   }
 }
 
+export function logDecision(entry: string): void {
+  const ts = new Date().toISOString().slice(11, 19);
+  console.log(`[DECIDE ${ts}] ${entry}`);
+  invoke("log_decision", { entry: `${ts} ${entry}` }).catch(() => {});
+}
+
+
 

@@ -16,6 +16,7 @@ export interface AppState {
   lastClick: number;
   clicks: number[];
   walkToken: number;
+  lastModeChange: number;
 }
 
 export const state: AppState = {
@@ -32,6 +33,7 @@ export const state: AppState = {
   lastClick: 0,
   clicks: [],
   walkToken: 0,
+  lastModeChange: Date.now(),
 };
 
 type StateListener = (state: AppState) => void;
@@ -49,6 +51,7 @@ export function onStateChange(fn: StateListener): () => void {
 export function setMode(newMode: Mode) {
   if (state.mode === newMode) return;
   state.mode = newMode;
+  state.lastModeChange = Date.now();
   notify();
 }
 
