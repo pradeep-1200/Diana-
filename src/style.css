@@ -37,7 +37,7 @@ html, body {
   transition: opacity 0.18s, transform 0.18s;
   pointer-events: none;
 }
-#bubble.show { opacity: 1; transform: none; }
+#bubble.show { opacity: 1; transform: none; pointer-events: auto; }
 #bubble::after {
   content: "";
   position: absolute;

@@ -5,7 +5,7 @@ import { Mood } from "./mood";
 import { Behaviors } from "./behaviors";
 import { Brain, EMOTION_CLIPS } from "./brain";
 import { state, setMode, setWanderEnabled, setVisible, recordInteraction, setDragging } from "./state";
-import { petEl, bubbleEl, fx, say, bar } from "./ui";
+import { petEl, bubbleEl, fx, say, bar, syncHitRects } from "./ui";
 import {
   getWindowPosition,
   startDragging,
@@ -14,6 +14,7 @@ import {
   onWindowMoved,
   saveLocalPosition,
   showNativeContextMenu,
+  setDragState,
 } from "./platform";
 
 export class InputHandler {
@@ -137,6 +138,7 @@ export class InputHandler {
       if (Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 5) {
         this.dragging = true;
         setDragging(true);
+        setDragState(true);
         this.down = null;
         this.beginCarry();
         startDragging();
@@ -146,8 +148,15 @@ export class InputHandler {
     window.addEventListener("pointerup", () => {
       if (this.down && !this.dragging) this.onClick();
       this.down = null;
-      this.dragging = false;
-      setDragging(false);
+      if (this.dragging) {
+        this.dragging = false;
+        setDragging(false);
+        setDragState(false);
+        syncHitRects();
+      } else {
+        setDragging(false);
+        setDragState(false);
+      }
     });
   }
 

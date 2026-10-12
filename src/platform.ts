@@ -3,6 +3,7 @@
 import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { Menu, MenuOptions } from "@tauri-apps/api/menu";
+import { invoke } from "@tauri-apps/api/core";
 
 export const win = getCurrentWindow();
 
@@ -89,3 +90,27 @@ export async function showNativeContextMenu(items: NonNullable<MenuOptions["item
   const menu = await Menu.new({ items });
   await menu.popup();
 }
+
+export interface HitRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export async function updateHitRects(rects: HitRect[]): Promise<void> {
+  try {
+    await invoke("update_hit_rects", { rects });
+  } catch (err) {
+    console.warn("Failed to update hit rects:", err);
+  }
+}
+
+export async function setDragState(dragging: boolean): Promise<void> {
+  try {
+    await invoke("set_drag_state", { dragging });
+  } catch (err) {
+    console.warn("Failed to set drag state:", err);
+  }
+}
+

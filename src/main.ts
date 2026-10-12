@@ -5,7 +5,7 @@ import { Behaviors, sleep, hour, isLateNight } from "./behaviors";
 import { InputHandler } from "./input";
 import { state, setVisible } from "./state";
 import { SCALE, BREAK_EVERY_MIN, TASKBAR_MARGIN, applyScale } from "./config";
-import { spriteEl, say } from "./ui";
+import { spriteEl, say, syncHitRects } from "./ui";
 import {
   getMonitor,
   getWindowSize,
@@ -98,6 +98,7 @@ async function placeInitially() {
 async function start() {
   await placeInitially();
   anim.play("idle");
+  syncHitRects();
   await sleep(900);
 
   const away = mood.awayMinutes;

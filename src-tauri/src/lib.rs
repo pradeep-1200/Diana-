@@ -1,3 +1,6 @@
+mod hittest;
+
+use hittest::{set_drag_state, update_hit_rects, HitTester};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -12,14 +15,26 @@ fn toggle_visibility(app: &AppHandle) {
         } else {
             let _ = w.show();
         }
+        if let Some(hittest) = app.try_state::<HitTester>() {
+            hittest.set_visible(!now_visible);
+        }
         let _ = app.emit("pet-visible", !now_visible);
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let hittest = HitTester::new();
+
     tauri::Builder::default()
+        .manage(hittest)
+        .invoke_handler(tauri::generate_handler![
+            update_hit_rects,
+            set_drag_state,
+        ])
         .setup(|app| {
+            let ht = app.state::<HitTester>();
+            ht.start_thread(app.handle().clone());
             let toggle = MenuItem::with_id(app, "toggle", "Show / Hide Diana", true, None::<&str>)?;
             let dance = MenuItem::with_id(app, "dance", "Dance", true, None::<&str>)?;
             let sleep = MenuItem::with_id(app, "sleep", "Nap / Wake", true, None::<&str>)?;

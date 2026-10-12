@@ -1,5 +1,7 @@
 // UI elements, animations, speech bubble, and emotes
 
+import { updateHitRects, HitRect } from "./platform";
+
 export const petEl = document.getElementById("pet")!;
 export const spriteEl = document.getElementById("sprite")!;
 export const bubbleEl = document.getElementById("bubble")!;
@@ -40,6 +42,47 @@ export const fx = {
     ),
 };
 
+export function syncHitRects() {
+  const rects: HitRect[] = [];
+  const petRect = petEl.getBoundingClientRect();
+  if (petRect.width > 0 && petRect.height > 0) {
+    rects.push({
+      x: petRect.left,
+      y: petRect.top,
+      width: petRect.width,
+      height: petRect.height,
+    });
+  }
+
+  if (bubbleEl.classList.contains("show")) {
+    const bubbleRect = bubbleEl.getBoundingClientRect();
+    if (bubbleRect.width > 0 && bubbleRect.height > 0) {
+      rects.push({
+        x: bubbleRect.left,
+        y: bubbleRect.top,
+        width: bubbleRect.width,
+        height: bubbleRect.height,
+      });
+    }
+  }
+
+  // Include any visible inline input or modal
+  const inputs = document.querySelectorAll<HTMLElement>("input, button");
+  for (const input of Array.from(inputs)) {
+    const r = input.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      rects.push({
+        x: r.left,
+        y: r.top,
+        width: r.width,
+        height: r.height,
+      });
+    }
+  }
+
+  updateHitRects(rects);
+}
+
 export function emote(ch: string) {
   const s = document.createElement("span");
   s.className = "emote";
@@ -52,20 +95,23 @@ export function emote(ch: string) {
 export function say(text: string, emoteChar?: string, ms?: number) {
   bubbleEl.textContent = text;
   bubbleEl.classList.add("show");
+  syncHitRects();
   window.clearTimeout(bubbleTimer);
-  bubbleTimer = window.setTimeout(
-    () => bubbleEl.classList.remove("show"),
-    ms ?? 2200 + text.length * 60
-  );
+  bubbleTimer = window.setTimeout(() => {
+    bubbleEl.classList.remove("show");
+    syncHitRects();
+  }, ms ?? 2200 + text.length * 60);
   if (emoteChar) emote(emoteChar);
 }
 
 export function hideBubble() {
   window.clearTimeout(bubbleTimer);
   bubbleEl.classList.remove("show");
+  syncHitRects();
 }
 
 export function bar(v: number): string {
   const n = Math.round(v / 20);
   return "▮".repeat(n) + "▯".repeat(5 - n);
 }
+
