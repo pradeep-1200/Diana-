@@ -17,6 +17,7 @@ pub struct FullscreenAndPower {
     pub is_fullscreen: bool,
     pub is_charging: bool,
     pub battery_percent: Option<u8>,
+    pub notification_state: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -25,6 +26,7 @@ pub struct SystemActivity {
     pub is_fullscreen: bool,
     pub is_charging: bool,
     pub battery_percent: Option<u8>,
+    pub notification_state: u32,
 }
 
 #[tauri::command]
@@ -49,12 +51,15 @@ pub fn get_fullscreen_and_power() -> FullscreenAndPower {
     #[cfg(windows)]
     {
         // 1. Fullscreen state
-        let is_fullscreen = match unsafe { SHQueryUserNotificationState() } {
-            Ok(state) => matches!(
-                state,
-                QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE
-            ),
-            Err(_) => false,
+        let (is_fullscreen, notification_state) = match unsafe { SHQueryUserNotificationState() } {
+            Ok(state) => {
+                let fs = matches!(
+                    state,
+                    QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE
+                );
+                (fs, state.0 as u32)
+            }
+            Err(_) => (false, 0),
         };
 
         // 2. Battery / Power state
@@ -76,6 +81,7 @@ pub fn get_fullscreen_and_power() -> FullscreenAndPower {
             is_fullscreen,
             is_charging,
             battery_percent,
+            notification_state,
         };
     }
 
@@ -84,6 +90,7 @@ pub fn get_fullscreen_and_power() -> FullscreenAndPower {
         is_fullscreen: false,
         is_charging: true,
         battery_percent: None,
+        notification_state: 0,
     }
 }
 
@@ -96,5 +103,6 @@ pub fn get_system_activity() -> SystemActivity {
         is_fullscreen: fp.is_fullscreen,
         is_charging: fp.is_charging,
         battery_percent: fp.battery_percent,
+        notification_state: fp.notification_state,
     }
 }

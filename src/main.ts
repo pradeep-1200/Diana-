@@ -25,6 +25,7 @@ import {
   onSettingWalkSpeed,
   onSettingUsername,
   onMemoryReset,
+  getUserIdleMs,
   logDecision,
 } from "./platform";
 
@@ -50,10 +51,15 @@ onTrayAction((action) => {
 
 onPetVisible((visible) => {
   setVisible(visible);
+  logDecision(`onPetVisible: visible=${visible} (reason: user/tray visibility toggle)`);
   if (visible) {
     anim.resume();
+    behaviors.scheduleDecide("onPetVisible");
+    activityMonitor.start();
   } else {
     anim.pause();
+    behaviors.stopDecide();
+    activityMonitor.stop();
     mood.flush();
     dbLogEvent("session_hide");
   }
@@ -82,36 +88,44 @@ onSettingUsername((name) => {
 
 onMemoryReset(async () => {
   await mood.init();
-  brain.setUserName("");
-  say("I feel refreshed! Like a new day~ ✨");
-});
-
-// Slow background clock (once per minute)
-setInterval(async () => {
-  mood.tick(1, state.mode === "sleeping");
+  mood.s.energy = 80;
   mood.save();
   await mood.flush();
+  brain.setUserName("");
+  say("I feel refreshed! Like a new day~ ✨");
+  behaviors.toIdle();
+});
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  await dbRecordActivity(todayStr, hour(), 1, 0);
+let minuteClockTimer: number | undefined;
 
-  if (!state.visible || state.mode !== "idle" || state.dndEnabled) return;
+function startMinuteClock() {
+  if (minuteClockTimer) clearInterval(minuteClockTimer);
+  minuteClockTimer = window.setInterval(async () => {
+    const idleMs = await getUserIdleMs();
+    const userActive = idleMs < 60000;
+    mood.tick(1, state.mode === "sleeping", userActive);
+    mood.save();
+    await mood.flush();
 
-  const now = Date.now();
-  if (isLateNight() && now - state.lastLateNight > 60 * 60000) {
-    state.lastLateNight = now;
-    const reply = await brain.respond({
-      trigger: "lateNight",
-      moodLabel: mood.label(),
-      energy: mood.s.energy,
-      hour: hour(),
-    });
-    say(reply.text, reply.emote, 5000);
-    behaviors.act("thinking", 3);
-  }
-}, 60000);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    await dbRecordActivity(todayStr, hour(), 1, 0);
 
-activityMonitor.start();
+    if (!state.visible || state.mode !== "idle" || state.dndEnabled) return;
+
+    const now = Date.now();
+    if (isLateNight() && now - state.lastLateNight > 60 * 60000) {
+      state.lastLateNight = now;
+      const reply = await brain.respond({
+        trigger: "lateNight",
+        moodLabel: mood.label(),
+        energy: mood.s.energy,
+        hour: hour(),
+      });
+      say(reply.text, reply.emote, 5000);
+      behaviors.act("thinking", 3);
+    }
+  }, 60000);
+}
 
 // Initial placement and greeting sequence
 async function placeInitially() {
@@ -139,10 +153,20 @@ async function placeInitially() {
   await setWindowPosition(x, y);
 }
 
+let hasStarted = false;
+
 async function start() {
+  if (hasStarted) {
+    logDecision("main.ts start() re-called -> tearing down timers for clean idempotent restart");
+    behaviors.stopDecide();
+    activityMonitor.stop();
+  }
+  hasStarted = true;
   logDecision("main.ts start() begin");
   await placeInitially();
   anim.play("idle");
+  startMinuteClock();
+  activityMonitor.start();
 
   // 1. Initialize SQLite mood & load settings
   await mood.init();

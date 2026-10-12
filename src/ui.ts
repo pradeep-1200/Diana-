@@ -7,6 +7,16 @@ export const spriteEl = document.getElementById("sprite")!;
 export const bubbleEl = document.getElementById("bubble")!;
 export const stageEl = document.getElementById("stage")!;
 
+petEl.classList.add("alive");
+
+export function setMotionSleeping(sleeping: boolean) {
+  petEl.classList.toggle("sleeping", sleeping);
+}
+
+export function setMotionPaused(paused: boolean) {
+  petEl.classList.toggle("paused-motion", paused);
+}
+
 let bubbleTimer: number | undefined;
 
 export const fx = {
@@ -39,6 +49,46 @@ export const fx = {
         { transform: "scale(1,1)" },
       ],
       { duration: 240, transformOrigin: "bottom center" } as KeyframeAnimationOptions
+    ),
+  sway: () =>
+    petEl.animate(
+      [
+        { transform: "rotate(0deg)" },
+        { transform: "rotate(-3deg)" },
+        { transform: "rotate(3deg)" },
+        { transform: "rotate(0deg)" },
+      ],
+      { duration: 1200, easing: "ease-in-out" }
+    ),
+  shiver: () =>
+    petEl.animate(
+      [
+        { transform: "translateX(0)" },
+        { transform: "translateX(-2px)" },
+        { transform: "translateX(2px)" },
+        { transform: "translateX(-1.5px)" },
+        { transform: "translateX(1.5px)" },
+        { transform: "translateX(0)" },
+      ],
+      { duration: 380 }
+    ),
+  stretch: () =>
+    petEl.animate(
+      [
+        { transform: "scale(1,1)" },
+        { transform: "scale(0.96, 1.08)" },
+        { transform: "scale(1,1)" },
+      ],
+      { duration: 520, transformOrigin: "bottom center" } as KeyframeAnimationOptions
+    ),
+  hiccup: () =>
+    petEl.animate(
+      [
+        { transform: "translateY(0)" },
+        { transform: "translateY(-7px) scale(1.02, 0.98)" },
+        { transform: "translateY(0)" },
+      ],
+      { duration: 180, easing: "ease-out" }
     ),
 };
 

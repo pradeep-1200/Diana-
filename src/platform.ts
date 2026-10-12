@@ -163,13 +163,14 @@ export interface FullscreenAndPower {
   is_fullscreen: boolean;
   is_charging: boolean;
   battery_percent: number | null;
+  notification_state: number;
 }
 
 export async function getFullscreenAndPower(): Promise<FullscreenAndPower> {
   try {
     return await invoke<FullscreenAndPower>("get_fullscreen_and_power");
   } catch {
-    return { is_fullscreen: false, is_charging: true, battery_percent: null };
+    return { is_fullscreen: false, is_charging: true, battery_percent: null, notification_state: 0 };
   }
 }
 

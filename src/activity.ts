@@ -41,6 +41,8 @@ export class ActivityMonitor {
   stop() {
     window.clearTimeout(this.idleTimer);
     window.clearTimeout(this.powerTimer);
+    this.idleTimer = undefined;
+    this.powerTimer = undefined;
   }
 
   // --- Manual Do Not Disturb toggle ---
@@ -48,11 +50,16 @@ export class ActivityMonitor {
     const next = !state.dndEnabled;
     setDndEnabled(next);
     if (next) {
+      logDecision("toggleDnd: ON (reason: user DND) -> hiding window, pausing anim, canceling timers");
       this.anim.pause();
+      this.stop();
+      this.behaviors.stopDecide();
       hideWindow();
     } else {
+      logDecision("toggleDnd: OFF (reason: user DND) -> restoring window, resuming anim, re-arming timers");
       showWindow();
       this.anim.resume();
+      this.start();
       say("Do not disturb turned off. I'm back!");
       this.behaviors.toIdle();
     }
@@ -61,9 +68,9 @@ export class ActivityMonitor {
   // --- Fast Poll: User Idle Time (Every ~10s or ~2s in debug-fast) ---
   private scheduleIdleCheck() {
     window.clearTimeout(this.idleTimer);
-    // If hidden or DND, do not poll
+    this.idleTimer = undefined;
+    // If hidden, DND, or fullscreen, cancel polling completely
     if (!state.visible || state.dndEnabled || this.hiddenDueToFullscreen) {
-      this.idleTimer = window.setTimeout(() => this.scheduleIdleCheck(), 3000);
       return;
     }
     const interval = this.debugFast ? 2000 : 10000;
@@ -135,9 +142,9 @@ export class ActivityMonitor {
   // --- Slow Poll: Fullscreen & Battery (Every ~30s) ---
   private schedulePowerCheck() {
     window.clearTimeout(this.powerTimer);
-    // If hidden or DND, do not poll
+    this.powerTimer = undefined;
+    // If user hid window or DND is on, zero polling
     if (!state.visible || state.dndEnabled) {
-      this.powerTimer = window.setTimeout(() => this.schedulePowerCheck(), 5000);
       return;
     }
     this.powerTimer = window.setTimeout(async () => {
@@ -154,18 +161,27 @@ export class ActivityMonitor {
     // 1. Fullscreen handling (Amendment 3)
     if (data.is_fullscreen) {
       if (!this.hiddenDueToFullscreen) {
-        logDecision("ActivityMonitor: entering D3D fullscreen / presentation -> hiding window and pausing");
+        logDecision(
+          `ActivityMonitor: hideWindow due to fullscreen (reason: fullscreen, raw SHQueryUserNotificationState=${data.notification_state})`
+        );
         this.hiddenDueToFullscreen = true;
         this.anim.pause();
+        this.behaviors.stopDecide();
+        window.clearTimeout(this.idleTimer);
+        this.idleTimer = undefined;
         await hideWindow();
       }
-      return; // Do not process battery or timers while fullscreen
+      return; // Do not process battery or idle timers while fullscreen
     } else if (this.hiddenDueToFullscreen) {
       // Exited fullscreen -> restore window
-      logDecision("ActivityMonitor: exited fullscreen -> restoring window and resuming animation");
+      logDecision(
+        `ActivityMonitor: showWindow exiting fullscreen (reason: fullscreen exited, raw SHQueryUserNotificationState=${data.notification_state})`
+      );
       this.hiddenDueToFullscreen = false;
       await showWindow();
       this.anim.resume();
+      this.scheduleIdleCheck();
+      this.behaviors.toIdle();
     }
 
     // 2. Battery & Charging transitions

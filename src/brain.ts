@@ -93,9 +93,11 @@ export class ScriptedBrain implements Brain {
   private resolveTrigger(ctx: BrainContext): { key: string; emotion: Emotion } {
     switch (ctx.trigger) {
       case "click": {
+        if (ctx.energy < 20 && ctx.moodLabel === "sleepy") {
+          return { key: "clickSleepy", emotion: "sleepy" };
+        }
         switch (ctx.moodLabel) {
           case "happy": return { key: "clickHappy", emotion: "happy" };
-          case "sleepy": return { key: "clickSleepy", emotion: "sleepy" };
           case "down": return { key: "clickDown", emotion: "shy" };
           case "lonely": return { key: "clickLonely", emotion: "shy" };
           case "bored": return { key: "clickBored", emotion: "happy" };
@@ -121,13 +123,15 @@ export class ScriptedBrain implements Brain {
       case "unplugged": return { key: "unplugged", emotion: "curious" };
       case "ponder": return { key: "thoughtContent", emotion: "curious" };
       case "thought": {
+        if (ctx.energy < 20 && ctx.moodLabel === "sleepy") {
+          return { key: "thoughtSleepy", emotion: "sleepy" };
+        }
         switch (ctx.moodLabel) {
           case "happy": return { key: "thoughtHappy", emotion: "happy" };
           case "bored": return { key: "thoughtBored", emotion: "neutral" };
           case "down": return { key: "thoughtDown", emotion: "sad" };
           case "lonely": return { key: "thoughtLonely", emotion: "sad" };
-          case "sleepy": return { key: "thoughtSleepy", emotion: "sleepy" };
-          default: return { key: "thoughtContent", emotion: "neutral" };
+          default: return { key: "thoughtContent", emotion: "curious" };
         }
       }
       default: {

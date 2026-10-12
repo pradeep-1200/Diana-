@@ -100,6 +100,9 @@ export class Mood {
     });
   }
 
+  private recentDanceTimestamps: number[] = [];
+  dizzyUntil = 0;
+
   /** Apply what happened while the app was closed. */
   private catchUp() {
     const mins = Math.min(12 * 60, (Date.now() - this.s.lastSeen) / 60000);
@@ -107,18 +110,28 @@ export class Mood {
     if (mins < 1) return;
     const s = this.s;
     s.energy = clamp(s.energy + Math.min(60, mins * 0.5)); // she rested
+    if (mins >= 30) {
+      // On startup after being closed >= 30 min, restore energy to at least 60
+      s.energy = Math.max(s.energy, 60);
+    }
     s.boredom = clamp(s.boredom + Math.min(50, mins * 0.15));
     s.affection = clamp(s.affection - Math.min(12, mins * 0.02));
     this.save();
   }
 
   /** Call once per minute. */
-  tick(minutes: number, sleeping: boolean) {
+  tick(minutes: number, sleeping: boolean, userActive = false) {
     const s = this.s;
     if (sleeping) {
-      s.energy = clamp(s.energy + 1.4 * minutes);
+      // Sleep recovers ~3/min; she wakes on her own at ~70
+      s.energy = clamp(s.energy + 3.0 * minutes);
     } else {
-      s.energy = clamp(s.energy - 0.2 * minutes);
+      // Awake drain <= ~0.1/min (0.08/min)
+      s.energy = clamp(s.energy - 0.08 * minutes);
+      // Floor of ~25 while user is active, so she can look tired without force-napping
+      if (userActive && s.energy < 25) {
+        s.energy = 25;
+      }
       s.boredom = clamp(s.boredom + 0.7 * minutes);
     }
     s.affection = clamp(s.affection - 0.02 * minutes);
@@ -137,6 +150,10 @@ export class Mood {
     return "content";
   }
 
+  isDizzy(): boolean {
+    return Date.now() < this.dizzyUntil;
+  }
+
   // --- events -------------------------------------------------------------
   pet() {
     const s = this.s;
@@ -151,12 +168,26 @@ export class Mood {
     this.s.affection = clamp(this.s.affection - 1);
     this.save();
   }
-  danced() {
+  danced(): { ok: boolean; dizzyNow: boolean } {
+    const now = Date.now();
+    if (now < this.dizzyUntil) {
+      return { ok: false, dizzyNow: true };
+    }
+    this.recentDanceTimestamps = this.recentDanceTimestamps.filter((t) => now - t < 45000);
+    this.recentDanceTimestamps.push(now);
+
     const s = this.s;
-    s.energy = clamp(s.energy - 3);
+    s.energy = clamp(s.energy - 0.5); // A dance costs ~0.5
     s.happiness = clamp(s.happiness + 4);
     s.boredom = clamp(s.boredom - 20);
     this.save();
+
+    if (this.recentDanceTimestamps.length >= 2) {
+      // After 2 dances in a row she says she's dizzy and refuses for ~2 min
+      this.dizzyUntil = now + 120000;
+      return { ok: true, dizzyNow: true };
+    }
+    return { ok: true, dizzyNow: false };
   }
   carried() {
     this.s.boredom = clamp(this.s.boredom - 5);
