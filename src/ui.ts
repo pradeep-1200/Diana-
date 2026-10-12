@@ -115,3 +115,91 @@ export function bar(v: number): string {
   return "▮".repeat(n) + "▯".repeat(5 - n);
 }
 
+export function askInlineInput(
+  promptText: string,
+  placeholder: string,
+  onSubmit: (val: string) => void,
+  onSkip: () => void
+) {
+  window.clearTimeout(bubbleTimer);
+  bubbleEl.textContent = "";
+
+  const textDiv = document.createElement("div");
+  textDiv.textContent = promptText;
+  textDiv.style.marginBottom = "6px";
+  textDiv.style.fontSize = "12px";
+  textDiv.style.fontWeight = "500";
+  bubbleEl.appendChild(textDiv);
+
+  const form = document.createElement("div");
+  form.style.display = "flex";
+  form.style.alignItems = "center";
+  form.style.justifyContent = "center";
+  form.style.gap = "4px";
+
+  const input = document.createElement("input");
+  input.id = "name-input";
+  input.type = "text";
+  input.maxLength = 20;
+  input.placeholder = placeholder;
+  input.style.width = "90px";
+  input.style.padding = "3px 6px";
+  input.style.fontSize = "12px";
+  input.style.borderRadius = "8px";
+  input.style.border = "1px solid #c0c0d0";
+  input.style.outline = "none";
+  input.style.background = "#f4f4fa";
+  input.style.textAlign = "center";
+
+  const btnOk = document.createElement("button");
+  btnOk.textContent = "✔";
+  btnOk.style.padding = "3px 6px";
+  btnOk.style.fontSize = "11px";
+  btnOk.style.borderRadius = "8px";
+  btnOk.style.border = "none";
+  btnOk.style.background = "#5b73ff";
+  btnOk.style.color = "#ffffff";
+  btnOk.style.cursor = "pointer";
+
+  const btnSkip = document.createElement("button");
+  btnSkip.textContent = "✖";
+  btnSkip.style.padding = "3px 6px";
+  btnSkip.style.fontSize = "11px";
+  btnSkip.style.borderRadius = "8px";
+  btnSkip.style.border = "none";
+  btnSkip.style.background = "#e0e0e8";
+  btnSkip.style.color = "#444444";
+  btnSkip.style.cursor = "pointer";
+
+  form.appendChild(input);
+  form.appendChild(btnOk);
+  form.appendChild(btnSkip);
+  bubbleEl.appendChild(form);
+
+  bubbleEl.classList.add("show");
+  syncHitRects();
+
+  let finished = false;
+  const finish = (val?: string) => {
+    if (finished) return;
+    finished = true;
+    bubbleEl.classList.remove("show");
+    bubbleEl.textContent = "";
+    syncHitRects();
+    if (val !== undefined && val.length > 0) {
+      onSubmit(val);
+    } else {
+      onSkip();
+    }
+  };
+
+  btnOk.addEventListener("click", () => finish(input.value.trim()));
+  btnSkip.addEventListener("click", () => finish());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") finish(input.value.trim());
+    else if (e.key === "Escape") finish();
+  });
+
+  setTimeout(() => input.focus(), 60);
+}
+

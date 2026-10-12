@@ -173,3 +173,127 @@ export async function getFullscreenAndPower(): Promise<FullscreenAndPower> {
   }
 }
 
+export interface MoodRecord {
+  energy: number;
+  happiness: number;
+  affection: number;
+  boredom: number;
+  last_seen: number;
+  total_pets: number;
+}
+
+export interface FactRecord {
+  key: string;
+  value: string;
+  source: string;
+  updated_at: number;
+}
+
+export interface StatsSummary {
+  streak_days: number;
+  total_pets: number;
+  total_active_minutes: number;
+  top_active_hours: number[];
+}
+
+export async function dbGetMood(): Promise<MoodRecord | null> {
+  try {
+    return await invoke<MoodRecord | null>("db_get_mood");
+  } catch {
+    return null;
+  }
+}
+
+export async function dbSaveMood(mood: MoodRecord): Promise<void> {
+  try {
+    await invoke("db_save_mood", { mood });
+  } catch (err) {
+    console.warn("db_save_mood failed:", err);
+  }
+}
+
+export async function dbGetSetting(key: string): Promise<string | null> {
+  try {
+    return await invoke<string | null>("db_get_setting", { key });
+  } catch {
+    return null;
+  }
+}
+
+export async function dbSetSetting(key: string, value: string): Promise<void> {
+  try {
+    await invoke("db_set_setting", { key, value });
+  } catch (err) {
+    console.warn("db_set_setting failed:", err);
+  }
+}
+
+export async function dbGetAllSettings(): Promise<Record<string, string>> {
+  try {
+    return await invoke<Record<string, string>>("db_get_all_settings");
+  } catch {
+    return {};
+  }
+}
+
+export async function dbGetFact(key: string): Promise<FactRecord | null> {
+  try {
+    return await invoke<FactRecord | null>("db_get_fact", { key });
+  } catch {
+    return null;
+  }
+}
+
+export async function dbSetFact(key: string, value: string, source: string): Promise<void> {
+  try {
+    await invoke("db_set_fact", { key, value, source });
+  } catch (err) {
+    console.warn("db_set_fact failed:", err);
+  }
+}
+
+export async function dbLogEvent(eventType: string, meta?: string): Promise<void> {
+  try {
+    await invoke("db_log_event", { eventType, meta: meta ?? null });
+  } catch (err) {
+    console.warn("db_log_event failed:", err);
+  }
+}
+
+export async function dbRecordActivity(
+  date: string,
+  hour: number,
+  activeMins: number,
+  pets: number
+): Promise<void> {
+  try {
+    await invoke("db_record_activity", { date, hour, activeMins, pets });
+  } catch (err) {
+    console.warn("db_record_activity failed:", err);
+  }
+}
+
+export async function dbGetStatsSummary(): Promise<StatsSummary> {
+  try {
+    return await invoke<StatsSummary>("db_get_stats_summary");
+  } catch {
+    return { streak_days: 0, total_pets: 0, total_active_minutes: 0, top_active_hours: [] };
+  }
+}
+
+export async function dbResetMemory(): Promise<void> {
+  try {
+    await invoke("db_reset_memory");
+  } catch (err) {
+    console.warn("db_reset_memory failed:", err);
+  }
+}
+
+export async function dbImportLocalStorage(mood?: MoodRecord | null, pos?: string | null): Promise<void> {
+  try {
+    await invoke("db_import_local_storage", { mood: mood ?? null, pos: pos ?? null });
+  } catch (err) {
+    console.warn("db_import_local_storage failed:", err);
+  }
+}
+

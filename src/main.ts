@@ -4,8 +4,8 @@ import { ScriptedBrain } from "./brain";
 import { Behaviors, sleep, hour, isLateNight } from "./behaviors";
 import { InputHandler } from "./input";
 import { state, setVisible } from "./state";
-import { SCALE, BREAK_EVERY_MIN, TASKBAR_MARGIN, applyScale } from "./config";
-import { spriteEl, say, syncHitRects } from "./ui";
+import { SCALE, applyScale } from "./config";
+import { spriteEl, say, syncHitRects, askInlineInput } from "./ui";
 import {
   getCurrentWorkArea,
   getWindowSize,
@@ -13,6 +13,12 @@ import {
   loadLocalPosition,
   onTrayAction,
   onPetVisible,
+  focusWindow,
+  dbGetFact,
+  dbSetFact,
+  dbLogEvent,
+  dbRecordActivity,
+  dbGetStatsSummary,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
@@ -37,14 +43,24 @@ onTrayAction((action) => {
 
 onPetVisible((visible) => {
   setVisible(visible);
-  if (visible) anim.resume();
-  else anim.pause();
+  if (visible) {
+    anim.resume();
+  } else {
+    anim.pause();
+    mood.flush();
+    dbLogEvent("session_hide");
+  }
 });
 
 // Slow background clock (once per minute)
 setInterval(async () => {
   mood.tick(1, state.mode === "sleeping");
   mood.save();
+  await mood.flush();
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  await dbRecordActivity(todayStr, hour(), 1, 0);
+
   if (!state.visible || state.mode !== "idle" || state.dndEnabled) return;
 
   const now = Date.now();
@@ -93,8 +109,49 @@ async function start() {
   await placeInitially();
   anim.play("idle");
   syncHitRects();
+
+  // 1. Initialize SQLite mood & log session start
+  await mood.init();
+  await dbLogEvent("session_start");
+
+  // 2. Onboarding: Check user name fact
+  const nameFact = await dbGetFact("user_name");
+  if (!nameFact || !nameFact.value.trim()) {
+    await sleep(400);
+    // Explicitly focus window for typing
+    await focusWindow();
+    askInlineInput(
+      "Hi! What should I call you?",
+      "Your name...",
+      async (name) => {
+        if (name) {
+          await dbSetFact("user_name", name, "onboarding");
+          brain.setUserName(name);
+          say(`Nice to meet you, ${name}! ❤`);
+        } else {
+          say("That's okay! We can just hang out. ✨");
+        }
+        behaviors.act("cozy", 2);
+        (document.activeElement as HTMLElement)?.blur();
+        behaviors.scheduleDecide();
+      },
+      () => {
+        say("No problem! Let's be friends anyway~ ✨");
+        behaviors.act("cozy", 2);
+        (document.activeElement as HTMLElement)?.blur();
+        behaviors.scheduleDecide();
+      }
+    );
+    return;
+  }
+
+  brain.setUserName(nameFact.value);
+
   await sleep(900);
 
+  // 3. Stats Summary: streaks & active hour pattern
+  const stats = await dbGetStatsSummary();
+  const h = hour();
   const away = mood.awayMinutes;
   const greetingTrigger =
     away > 180 ? "returnLong" : away > 20 ? "returnShort" : "timeGreeting";
@@ -103,13 +160,26 @@ async function start() {
     trigger: greetingTrigger,
     moodLabel: mood.label(),
     energy: mood.s.energy,
-    hour: hour(),
+    hour: h,
     awayMinutes: away,
   });
-  say(reply.text, reply.emote, reply.durationMs);
+
+  let text = reply.text;
+  if (stats.top_active_hours.includes(h) && Math.random() < 0.4) {
+    text += " You're usually up around this time!";
+  } else if (stats.streak_days >= 7 && Math.random() < 0.35) {
+    text += ` Day ${stats.streak_days} in a row!`;
+  }
+
+  say(text, reply.emote, reply.durationMs);
   behaviors.act("cozy", 2);
   behaviors.scheduleDecide();
 }
+
+window.addEventListener("beforeunload", () => {
+  mood.flush();
+  dbLogEvent("session_end");
+});
 
 document.addEventListener("dragstart", (e) => e.preventDefault());
 start();

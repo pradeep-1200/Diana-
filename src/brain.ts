@@ -57,14 +57,28 @@ export interface Brain {
  * Scripted brain implementation wrapping deterministic lines and personality rules.
  */
 export class ScriptedBrain implements Brain {
+  userName = "";
+
+  setUserName(name: string) {
+    this.userName = name.trim();
+  }
+
   async respond(ctx: BrainContext): Promise<BrainReply> {
+    const activeName = ctx.userName?.trim() || this.userName;
     const { key, emotion } = this.resolveTrigger(ctx);
     const line: Line = pick(key);
     let text = line.t;
 
     // Substitute template tags if name is available
     if (text.includes("{name}")) {
-      text = text.replace(/\{name\}/g, ctx.userName?.trim() || "");
+      text = text.replace(/\{name\}/g, activeName || "");
+    } else if (
+      activeName &&
+      Math.random() < 0.22 &&
+      (ctx.trigger === "click" || ctx.trigger === "thought" || ctx.trigger === "timeGreeting")
+    ) {
+      // Naturally address by name occasionally
+      text = `${text} ${activeName}~`;
     }
 
     const durationMs = 2200 + text.length * 60;

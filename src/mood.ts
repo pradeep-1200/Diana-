@@ -1,5 +1,6 @@
-// Tiny "inner life": four numbers (0-100) that drift over time and react to you.
-// Persisted in localStorage for now; we'll move this to SQLite in the memory phase.
+// Tiny "inner life": four numbers (0-100) drifting over time and persisted in SQLite.
+
+import { dbGetMood, dbSaveMood, dbImportLocalStorage, MoodRecord } from "./platform";
 
 const KEY = "diana.mood.v1";
 
@@ -28,13 +29,14 @@ const clamp = (v: number) => Math.max(0, Math.min(100, v));
 export class Mood {
   s: MoodState;
   awayMinutes = 0;
+  private dirty = false;
 
   constructor() {
-    this.s = this.load();
+    this.s = this.loadLocal();
     this.catchUp();
   }
 
-  private load(): MoodState {
+  private loadLocal(): MoodState {
     try {
       const raw = localStorage.getItem(KEY);
       if (raw) return { ...DEFAULT, ...JSON.parse(raw) };
@@ -42,11 +44,60 @@ export class Mood {
     return { ...DEFAULT, lastSeen: Date.now() };
   }
 
+  async init(): Promise<void> {
+    try {
+      // 1. One-time import check from localStorage
+      const localRaw = localStorage.getItem(KEY);
+      const localPos = localStorage.getItem("diana.pos");
+      let localMood: MoodRecord | null = null;
+      if (localRaw) {
+        try {
+          localMood = JSON.parse(localRaw);
+        } catch {}
+      }
+      await dbImportLocalStorage(localMood, localPos);
+
+      // 2. Load latest from SQLite
+      const fromDb = await dbGetMood();
+      if (fromDb) {
+        this.s = {
+          energy: fromDb.energy,
+          happiness: fromDb.happiness,
+          affection: fromDb.affection,
+          boredom: fromDb.boredom,
+          lastSeen: fromDb.last_seen || Date.now(),
+          totalPets: fromDb.total_pets || 0,
+        };
+      }
+    } catch (err) {
+      console.warn("Failed to load mood from SQLite:", err);
+    }
+    this.catchUp();
+  }
+
   save() {
     this.s.lastSeen = Date.now();
+    this.dirty = true;
     try {
       localStorage.setItem(KEY, JSON.stringify(this.s));
     } catch {}
+  }
+
+  /**
+   * Coalesced disk flush: writes dirty mood state to SQLite.
+   * Called during the minute clock and upon hide/exit.
+   */
+  async flush(): Promise<void> {
+    if (!this.dirty) return;
+    this.dirty = false;
+    await dbSaveMood({
+      energy: this.s.energy,
+      happiness: this.s.happiness,
+      affection: this.s.affection,
+      boredom: this.s.boredom,
+      last_seen: this.s.lastSeen,
+      total_pets: this.s.totalPets,
+    });
   }
 
   /** Apply what happened while the app was closed. */

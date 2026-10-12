@@ -15,6 +15,7 @@ import {
   saveLocalPosition,
   showNativeContextMenu,
   setDragState,
+  dbLogEvent,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
@@ -71,6 +72,13 @@ export class InputHandler {
     state.lastClick = now;
 
     this.mood.pet();
+    dbLogEvent("pet");
+    if (this.mood.s.totalPets === 100) {
+      say("100 pats! You're really the best! ❤", "✨", 5000);
+      fx.bounce();
+      return this.behaviors.act("cozy", 3);
+    }
+
     const label = this.mood.label();
     const reply = await this.brain.respond({
       trigger: "click",
@@ -98,6 +106,7 @@ export class InputHandler {
     recordInteraction();
     setMode("carried");
     this.mood.carried();
+    dbLogEvent("carry");
     this.anim.play("surprised");
 
     const reply = await this.brain.respond({
@@ -117,6 +126,7 @@ export class InputHandler {
 
   private async dropped() {
     if (state.mode !== "carried") return;
+    dbLogEvent("drop");
     const reply = await this.brain.respond({
       trigger: "drop",
       moodLabel: this.mood.label(),

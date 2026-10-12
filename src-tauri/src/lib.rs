@@ -1,7 +1,9 @@
 mod activity;
+mod db;
 mod hittest;
 
 use activity::{get_fullscreen_and_power, get_system_activity, get_user_idle_ms};
+use db::*;
 use hittest::{set_drag_state, update_hit_rects, HitTester};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -36,8 +38,24 @@ pub fn run() {
             get_user_idle_ms,
             get_fullscreen_and_power,
             get_system_activity,
+            db_get_mood,
+            db_save_mood,
+            db_get_setting,
+            db_set_setting,
+            db_get_all_settings,
+            db_get_fact,
+            db_set_fact,
+            db_log_event,
+            db_record_activity,
+            db_get_stats_summary,
+            db_reset_memory,
+            db_import_local_storage,
         ])
         .setup(|app| {
+            let db_state = db::DbState::new(app.handle())
+                .map_err(Box::<dyn std::error::Error>::from)?;
+            app.manage(db_state);
+
             let ht = app.state::<HitTester>();
             ht.start_thread(app.handle().clone());
             let toggle = MenuItem::with_id(app, "toggle", "Show / Hide Diana", true, None::<&str>)?;
