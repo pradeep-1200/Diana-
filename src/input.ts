@@ -16,6 +16,7 @@ import {
   showNativeContextMenu,
   setDragState,
   dbLogEvent,
+  openSettingsWindow,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
@@ -250,6 +251,7 @@ export class InputHandler {
           action: () => this.activityMonitor.toggleDnd(),
         },
         { item: "Separator" as const },
+        { id: "settings", text: "Settings...", action: () => openSettingsWindow() },
         { id: "hide", text: "Hide (bring back from tray)", action: () => this.hidePet() },
         {
           id: "quit",

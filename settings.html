@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Diana Settings</title>
+  <link rel="stylesheet" href="/src/settings.css" />
+</head>
+<body>
+  <div class="fluent-container">
+    <header class="app-header">
+      <div class="header-avatar">
+        <img src="/icons/128x128.png" alt="Diana" class="avatar-img" />
+      </div>
+      <div class="header-text">
+        <h1 class="header-title">Diana Settings</h1>
+        <p class="header-desc">Customize your desktop companion's personality and appearance</p>
+      </div>
+    </header>
+
+    <main class="settings-content">
+      <!-- Profile Section -->
+      <section class="fluent-card">
+        <div class="card-header">
+          <div class="card-icon">👤</div>
+          <div>
+            <h2 class="card-title">Profile</h2>
+            <p class="card-subtitle">What Diana calls you</p>
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="input-username" class="form-label">Your Name</label>
+          <div class="input-group">
+            <input type="text" id="input-username" class="fluent-input" placeholder="Friend" maxlength="32" />
+            <button id="btn-save-username" class="fluent-btn fluent-btn-accent">Save</button>
+          </div>
+        </div>
+        <div id="username-status" class="status-msg"></div>
+      </section>
+
+      <!-- Appearance Section -->
+      <section class="fluent-card">
+        <div class="card-header">
+          <div class="card-icon">🎨</div>
+          <div>
+            <h2 class="card-title">Appearance</h2>
+            <p class="card-subtitle">Sprite scaling and window position</p>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="row-info">
+            <label for="slider-scale" class="form-label">Sprite Size</label>
+            <span class="form-hint">Adjust Diana's size on screen</span>
+          </div>
+          <div class="slider-group">
+            <input type="range" id="slider-scale" min="0.5" max="1.2" step="0.05" value="0.8" class="fluent-slider" />
+            <span id="label-scale" class="slider-value">80%</span>
+          </div>
+        </div>
+        <div class="form-row toggle-row">
+          <div class="row-info">
+            <label for="toggle-always-on-top" class="form-label">Always on Top</label>
+            <span class="form-hint">Keep Diana visible over normal application windows</span>
+          </div>
+          <label class="fluent-toggle">
+            <input type="checkbox" id="toggle-always-on-top" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Behavior Section -->
+      <section class="fluent-card">
+        <div class="card-header">
+          <div class="card-icon">✨</div>
+          <div>
+            <h2 class="card-title">Behaviors</h2>
+            <p class="card-subtitle">Movement and interaction dynamics</p>
+          </div>
+        </div>
+        <div class="form-row toggle-row">
+          <div class="row-info">
+            <label for="toggle-wander" class="form-label">Wandering</label>
+            <span class="form-hint">Allow Diana to stroll along the bottom of your screen</span>
+          </div>
+          <label class="fluent-toggle">
+            <input type="checkbox" id="toggle-wander" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="form-row">
+          <div class="row-info">
+            <label for="slider-walk-speed" class="form-label">Walk Speed</label>
+            <span class="form-hint">How quickly she moves when wandering</span>
+          </div>
+          <div class="slider-group">
+            <input type="range" id="slider-walk-speed" min="60" max="180" step="10" value="110" class="fluent-slider" />
+            <span id="label-walk-speed" class="slider-value">110 px/s</span>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="row-info">
+            <label for="select-chattiness" class="form-label">Chattiness</label>
+            <span class="form-hint">How often Diana shares thoughts unprompted</span>
+          </div>
+          <select id="select-chattiness" class="fluent-select">
+            <option value="quiet">Quiet (rare comments)</option>
+            <option value="normal" selected>Normal (balanced)</option>
+            <option value="chatty">Chatty (frequent comments)</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Health & Wellbeing Section -->
+      <section class="fluent-card">
+        <div class="card-header">
+          <div class="card-icon">☕</div>
+          <div>
+            <h2 class="card-title">Health & Breaks</h2>
+            <p class="card-subtitle">Healthy habits and screen-time reminders</p>
+          </div>
+        </div>
+        <div class="form-row toggle-row">
+          <div class="row-info">
+            <label for="toggle-break" class="form-label">Break Reminders</label>
+            <span class="form-hint">Diana gently reminds you to stretch and rest your eyes</span>
+          </div>
+          <label class="fluent-toggle">
+            <input type="checkbox" id="toggle-break" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="form-row" id="row-break-interval">
+          <div class="row-info">
+            <label for="slider-break-interval" class="form-label">Reminder Interval</label>
+            <span class="form-hint">Active work minutes between reminders</span>
+          </div>
+          <div class="slider-group">
+            <input type="range" id="slider-break-interval" min="20" max="90" step="5" value="50" class="fluent-slider" />
+            <span id="label-break-interval" class="slider-value">50 min</span>
+          </div>
+        </div>
+        <div class="form-row toggle-row">
+          <div class="row-info">
+            <label for="toggle-quiet-hours" class="form-label">Quiet Hours</label>
+            <span class="form-hint">Stay asleep and mute dialogue during sleep hours</span>
+          </div>
+          <label class="fluent-toggle">
+            <input type="checkbox" id="toggle-quiet-hours" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="form-row time-range-row" id="row-quiet-hours-times" style="display: none;">
+          <div class="time-picker-group">
+            <label for="input-quiet-start" class="form-label">Start</label>
+            <input type="time" id="input-quiet-start" value="23:00" class="fluent-input time-input" />
+          </div>
+          <div class="time-picker-group">
+            <label for="input-quiet-end" class="form-label">End</label>
+            <input type="time" id="input-quiet-end" value="07:00" class="fluent-input time-input" />
+          </div>
+        </div>
+      </section>
+
+      <!-- System Integration Section -->
+      <section class="fluent-card">
+        <div class="card-header">
+          <div class="card-icon">⚙️</div>
+          <div>
+            <h2 class="card-title">System</h2>
+            <p class="card-subtitle">Windows startup and behavior</p>
+          </div>
+        </div>
+        <div class="form-row toggle-row">
+          <div class="row-info">
+            <label for="toggle-autostart" class="form-label">Start with Windows</label>
+            <span class="form-hint">Automatically wake Diana up when you log in</span>
+          </div>
+          <label class="fluent-toggle">
+            <input type="checkbox" id="toggle-autostart" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Memory & Stats Section -->
+      <section class="fluent-card">
+        <div class="card-header">
+          <div class="card-icon">🧠</div>
+          <div>
+            <h2 class="card-title">Memory & Stats</h2>
+            <p class="card-subtitle">Diana's memories of your time together</p>
+          </div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-value" id="stat-pets">0</span>
+            <span class="stat-label">Total Headpats</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value" id="stat-streak">0</span>
+            <span class="stat-label">Day Streak</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-value" id="stat-time">0h</span>
+            <span class="stat-label">Active Time</span>
+          </div>
+        </div>
+        <div class="danger-zone">
+          <div class="row-info">
+            <span class="form-label text-danger">Reset Memory</span>
+            <span class="form-hint">Erase all stats, headpats, and learned name</span>
+          </div>
+          <button id="btn-reset-memory" class="fluent-btn fluent-btn-danger">Reset...</button>
+        </div>
+      </section>
+
+      <!-- About Section -->
+      <section class="fluent-card about-card">
+        <div class="card-header">
+          <div class="card-icon">ℹ️</div>
+          <div>
+            <h2 class="card-title">About Diana Pet</h2>
+            <p class="card-subtitle">Version 0.1.0 — Desktop Companion</p>
+          </div>
+        </div>
+        <div class="about-details">
+          <p>Character inspired by Diana from Capcom's <em>Pragmata</em>.</p>
+          <p><strong>Art Attribution:</strong> Sprites created and adapted from the <strong>Diana Codex Pet</strong> repository (licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>).</p>
+          <div class="privacy-callout">
+            <div class="privacy-icon">🛡️</div>
+            <div class="privacy-text">
+              <strong>100% Offline & Private</strong><br />
+              Reads only user idle time, battery status, and fullscreen state. Zero keystrokes logged, zero screen capture, zero telemetry, zero network calls.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Confirmation Modal Dialog -->
+    <div id="modal-confirm" class="modal-backdrop" style="display: none;">
+      <div class="modal-dialog">
+        <h3 class="modal-title">Reset Diana's Memory?</h3>
+        <p class="modal-desc">
+          Are you sure you want to reset Diana's memories? This will erase all dialogue history, mood stats, headpat counts, and your learned name. This action cannot be undone.
+        </p>
+        <div class="modal-actions">
+          <button id="btn-modal-cancel" class="fluent-btn">Cancel</button>
+          <button id="btn-modal-confirm" class="fluent-btn fluent-btn-danger">Yes, Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/settings.ts"></script>
+</body>
+</html>

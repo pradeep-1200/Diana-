@@ -3,8 +3,8 @@ import { Mood } from "./mood";
 import { ScriptedBrain } from "./brain";
 import { Behaviors, sleep, hour, isLateNight } from "./behaviors";
 import { InputHandler } from "./input";
-import { state, setVisible } from "./state";
-import { SCALE, applyScale } from "./config";
+import { state, setVisible, setWanderEnabled } from "./state";
+import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin } from "./config";
 import { spriteEl, say, syncHitRects, askInlineInput } from "./ui";
 import {
   getCurrentWorkArea,
@@ -19,6 +19,12 @@ import {
   dbLogEvent,
   dbRecordActivity,
   dbGetStatsSummary,
+  dbGetAllSettings,
+  onSettingScale,
+  onSettingWander,
+  onSettingWalkSpeed,
+  onSettingUsername,
+  onMemoryReset,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
@@ -50,6 +56,33 @@ onPetVisible((visible) => {
     mood.flush();
     dbLogEvent("session_hide");
   }
+});
+
+// Live settings event listeners
+onSettingScale((scale) => {
+  applyScale(scale);
+  syncHitRects();
+});
+
+onSettingWander((enabled) => {
+  setWanderEnabled(enabled);
+  if (!enabled && state.mode === "walking") {
+    behaviors.toIdle();
+  }
+});
+
+onSettingWalkSpeed((speed) => {
+  setWalkSpeed(speed);
+});
+
+onSettingUsername((name) => {
+  brain.setUserName(name);
+});
+
+onMemoryReset(async () => {
+  await mood.init();
+  brain.setUserName("");
+  say("I feel refreshed! Like a new day~ ✨");
 });
 
 // Slow background clock (once per minute)
@@ -108,11 +141,28 @@ async function placeInitially() {
 async function start() {
   await placeInitially();
   anim.play("idle");
-  syncHitRects();
 
-  // 1. Initialize SQLite mood & log session start
+  // 1. Initialize SQLite mood & load settings
   await mood.init();
   await dbLogEvent("session_start");
+
+  const settings = await dbGetAllSettings();
+  if (settings["scale"]) {
+    const s = parseFloat(settings["scale"]);
+    if (!isNaN(s) && s > 0) applyScale(s);
+  }
+  if (settings["wander_enabled"] !== undefined) {
+    setWanderEnabled(settings["wander_enabled"] !== "false");
+  }
+  if (settings["walk_speed"]) {
+    const spd = parseInt(settings["walk_speed"], 10);
+    if (!isNaN(spd) && spd > 0) setWalkSpeed(spd);
+  }
+  if (settings["break_interval_mins"]) {
+    const bim = parseInt(settings["break_interval_mins"], 10);
+    if (!isNaN(bim) && bim > 0) setBreakEveryMin(bim);
+  }
+  syncHitRects();
 
   // 2. Onboarding: Check user name fact
   const nameFact = await dbGetFact("user_name");

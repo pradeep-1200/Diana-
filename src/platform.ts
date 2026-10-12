@@ -297,3 +297,40 @@ export async function dbImportLocalStorage(mood?: MoodRecord | null, pos?: strin
   }
 }
 
+export async function openSettingsWindow(): Promise<void> {
+  try {
+    await invoke("open_settings_window");
+  } catch (err) {
+    console.warn("open_settings_window failed:", err);
+  }
+}
+
+export async function onSettingScale(handler: (scale: number) => void): Promise<UnlistenFn> {
+  return await listen<number>("setting-scale", (e) => handler(e.payload));
+}
+
+export async function onSettingWander(handler: (enabled: boolean) => void): Promise<UnlistenFn> {
+  return await listen<boolean>("setting-wander", (e) => handler(e.payload));
+}
+
+export async function onSettingWalkSpeed(handler: (speed: number) => void): Promise<UnlistenFn> {
+  return await listen<number>("setting-walk-speed", (e) => handler(e.payload));
+}
+
+export async function onSettingUsername(handler: (name: string) => void): Promise<UnlistenFn> {
+  return await listen<string>("setting-username", (e) => handler(e.payload));
+}
+
+export async function onMemoryReset(handler: () => void): Promise<UnlistenFn> {
+  return await listen("memory-reset", () => handler());
+}
+
+export async function isDebugFast(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("is_debug_fast");
+  } catch {
+    return false;
+  }
+}
+
+

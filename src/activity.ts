@@ -1,6 +1,6 @@
 // Windows OS activity monitor: idle detection, fullscreen suspension, battery tracking, and breaks
 
-import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow } from "./platform";
+import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast } from "./platform";
 import { state, setDndEnabled } from "./state";
 import { BREAK_EVERY_MIN } from "./config";
 import { Animator } from "./sprites";
@@ -16,6 +16,7 @@ export class ActivityMonitor {
   private activeSeconds = 0;
   private wasAway = false;
   private hiddenDueToFullscreen = false;
+  private debugFast = false;
 
   private lastCharging: boolean | null = null;
   private lastBatteryPercent: number | null = null;
@@ -28,7 +29,11 @@ export class ActivityMonitor {
     private behaviors: Behaviors
   ) {}
 
-  start() {
+  async start() {
+    this.debugFast = await isDebugFast();
+    if (this.debugFast) {
+      console.log("[ActivityMonitor] DIANA_DEBUG_FAST=1 enabled: idle-sleep 30s, away 20s, break 1m");
+    }
     this.scheduleIdleCheck();
     this.schedulePowerCheck();
   }
@@ -53,7 +58,7 @@ export class ActivityMonitor {
     }
   }
 
-  // --- Fast Poll: User Idle Time (Every ~10s) ---
+  // --- Fast Poll: User Idle Time (Every ~10s or ~2s in debug-fast) ---
   private scheduleIdleCheck() {
     window.clearTimeout(this.idleTimer);
     // If hidden or DND, do not poll
@@ -61,10 +66,11 @@ export class ActivityMonitor {
       this.idleTimer = window.setTimeout(() => this.scheduleIdleCheck(), 3000);
       return;
     }
+    const interval = this.debugFast ? 2000 : 10000;
     this.idleTimer = window.setTimeout(async () => {
       await this.checkIdle();
       this.scheduleIdleCheck();
-    }, 10000);
+    }, interval);
   }
 
   private async checkIdle() {
@@ -72,11 +78,20 @@ export class ActivityMonitor {
 
     const idleMs = await getUserIdleMs();
 
+    // Timer thresholds (shrunk if DIANA_DEBUG_FAST=1)
+    const breakTargetSec = this.debugFast ? 60 : BREAK_EVERY_MIN * 60;
+    const breakResetMs = this.debugFast ? 20000 : 300000;
+    const awayThresholdMs = this.debugFast ? 20000 : 300000;
+    const idleSleepMs = this.debugFast ? 30000 : 900000;
+    const activeThresholdMs = this.debugFast ? 8000 : 60000;
+    const returnThresholdMs = this.debugFast ? 5000 : 15000;
+    const stepSec = this.debugFast ? 2 : 10;
+
     // 1. Break reminder tracking (Amendment 5)
-    if (idleMs < 60000) {
+    if (idleMs < activeThresholdMs) {
       // User is active: increment active seconds
-      this.activeSeconds += 10;
-      if (this.activeSeconds >= BREAK_EVERY_MIN * 60) {
+      this.activeSeconds += stepSec;
+      if (this.activeSeconds >= breakTargetSec) {
         this.activeSeconds = 0;
         const reply = await this.brain.respond({
           trigger: "breakTime",
@@ -87,20 +102,20 @@ export class ActivityMonitor {
         say(reply.text, reply.emote, 6000);
         this.behaviors.act("waiting", 4);
       }
-    } else if (idleMs >= 300000) {
-      // Idle for >= 5 minutes counts as a real break -> reset accumulator completely!
+    } else if (idleMs >= breakResetMs) {
+      // Idle for >= breakResetMs (5m or 20s) counts as a real break -> reset completely!
       this.activeSeconds = 0;
     }
 
     // 2. Absence & "Welcome back" (Amendment 7)
-    if (idleMs >= 300000) {
+    if (idleMs >= awayThresholdMs) {
       this.wasAway = true;
-      // If away for > 15 minutes and Diana is standing idle, let her take a nap
-      if (idleMs >= 900000 && state.mode === "idle") {
+      // If away for >= idleSleepMs (15m or 30s) and Diana is idle, take a nap
+      if (idleMs >= idleSleepMs && state.mode === "idle") {
         this.behaviors.startNap();
       }
-    } else if (this.wasAway && idleMs < 15000) {
-      // User just returned after being idle for >= 5 minutes
+    } else if (this.wasAway && idleMs < returnThresholdMs) {
+      // User returned after being idle
       this.wasAway = false;
       if (state.mode === "sleeping") {
         this.behaviors.wakeUp();

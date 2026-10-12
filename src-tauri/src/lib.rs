@@ -10,6 +10,57 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
+use tauri_plugin_autostart::ManagerExt;
+
+#[tauri::command]
+fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("settings.html".into()))
+        .title("Diana Settings")
+        .inner_size(480.0, 640.0)
+        .min_inner_size(400.0, 500.0)
+        .resizable(true)
+        .decorations(true)
+        .transparent(false)
+        .shadow(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enable: bool) -> Result<(), String> {
+    if enable {
+        app.autolaunch().enable().map_err(|e| e.to_string())
+    } else {
+        app.autolaunch().disable().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn set_main_always_on_top(app: AppHandle, always_on_top: bool) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        w.set_always_on_top(always_on_top).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn is_debug_fast() -> bool {
+    std::env::var("DIANA_DEBUG_FAST")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
 
 fn toggle_visibility(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -31,8 +82,17 @@ pub fn run() {
     let hittest = HitTester::new();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(hittest)
         .invoke_handler(tauri::generate_handler![
+            open_settings_window,
+            get_autostart,
+            set_autostart,
+            set_main_always_on_top,
+            is_debug_fast,
             update_hit_rects,
             set_drag_state,
             get_user_idle_ms,
@@ -62,8 +122,9 @@ pub fn run() {
             let dnd = MenuItem::with_id(app, "dnd", "Do Not Disturb", true, None::<&str>)?;
             let dance = MenuItem::with_id(app, "dance", "Dance", true, None::<&str>)?;
             let sleep = MenuItem::with_id(app, "sleep", "Nap / Wake", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle, &dnd, &dance, &sleep, &quit])?;
+            let menu = Menu::with_items(app, &[&toggle, &dnd, &dance, &sleep, &settings, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -73,6 +134,9 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "toggle" => toggle_visibility(app),
+                    "settings" => {
+                        let _ = open_settings_window(app.clone());
+                    }
                     id => {
                         let _ = app.emit("tray-action", id.to_string());
                     }
