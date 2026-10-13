@@ -53,7 +53,7 @@ html, body {
   position: relative;
   flex: none;
   width: calc(192px * var(--scale));
-  height: calc(208px * var(--scale));
+  height: calc(256px * var(--scale));
   cursor: grab;
   transform-origin: bottom center;
 }
@@ -94,8 +94,10 @@ html, body {
   bottom: 0;
   left: 50%;
   margin-left: -96px;
+  /* Fixed at 192×256 for both sheets. Main-sheet frames are bottom-aligned;
+     background-position Y is offset +48px by the Animator to push them down. */
   width: 192px;
-  height: 208px;
+  height: 256px;
   background: url("/spritesheet.png") 0 0 no-repeat;
   background-size: 1536px 1872px;
   transform-origin: bottom center;

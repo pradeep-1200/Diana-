@@ -151,6 +151,11 @@ async function placeInitially() {
     : wa.y + wa.height - size.height;
 
   await setWindowPosition(x, y);
+
+  // Cache floor/size into state for Rust physics fallback
+  state.floorY = wa.y + wa.height;
+  state.winH = size.height;
+  state.scaleFactor = wa.scaleFactor;
 }
 
 let hasStarted = false;

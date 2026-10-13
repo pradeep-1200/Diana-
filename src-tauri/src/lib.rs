@@ -4,7 +4,7 @@ mod hittest;
 
 use activity::{get_fullscreen_and_power, get_system_activity, get_user_idle_ms};
 use db::*;
-use hittest::{set_drag_state, update_hit_rects, HitTester};
+use hittest::{abort_physics, begin_drag, begin_fall, end_drag, set_drag_state, update_hit_rects, HitTester};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -116,6 +116,10 @@ pub fn run() {
             log_decision,
             update_hit_rects,
             set_drag_state,
+            begin_drag,
+            end_drag,
+            begin_fall,
+            abort_physics,
             get_user_idle_ms,
             get_fullscreen_and_power,
             get_system_activity,

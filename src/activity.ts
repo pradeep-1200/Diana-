@@ -51,10 +51,12 @@ export class ActivityMonitor {
     setDndEnabled(next);
     if (next) {
       logDecision("toggleDnd: ON (reason: user DND) -> hiding window, pausing anim, canceling timers");
-      this.anim.pause();
-      this.stop();
-      this.behaviors.stopDecide();
-      hideWindow();
+      this.behaviors.emergencyToFloor().then(() => {
+        this.anim.pause();
+        this.stop();
+        this.behaviors.stopDecide();
+        hideWindow();
+      });
     } else {
       logDecision("toggleDnd: OFF (reason: user DND) -> restoring window, resuming anim, re-arming timers");
       showWindow();
@@ -165,11 +167,13 @@ export class ActivityMonitor {
           `ActivityMonitor: hideWindow due to fullscreen (reason: fullscreen, raw SHQueryUserNotificationState=${data.notification_state})`
         );
         this.hiddenDueToFullscreen = true;
-        this.anim.pause();
-        this.behaviors.stopDecide();
-        window.clearTimeout(this.idleTimer);
-        this.idleTimer = undefined;
-        await hideWindow();
+        this.behaviors.emergencyToFloor().then(() => {
+          this.anim.pause();
+          this.behaviors.stopDecide();
+          window.clearTimeout(this.idleTimer);
+          this.idleTimer = undefined;
+          hideWindow();
+        });
       }
       return; // Do not process battery or idle timers while fullscreen
     } else if (this.hiddenDueToFullscreen) {

@@ -1,4 +1,6 @@
-// User input handling: clicking, petting, dragging, hover, and context menu
+// User input handling: clicking, petting, dragging (Rust-owned), hover, context menu.
+// Double-click detection works in all modes because JS owns pointer events on the WebView;
+// Rust only owns window *movement*, not input dispatch.
 
 import { Animator } from "./sprites";
 import { Mood } from "./mood";
@@ -8,7 +10,8 @@ import { state, setMode, setWanderEnabled, setVisible, recordInteraction, setDra
 import { petEl, bubbleEl, fx, say, bar, syncHitRects } from "./ui";
 import {
   getWindowPosition,
-  startDragging,
+  getWindowSize,
+  getCurrentWorkArea,
   hideWindow,
   closeWindow,
   onWindowMoved,
@@ -17,16 +20,22 @@ import {
   setDragState,
   dbLogEvent,
   openSettingsWindow,
+  beginDrag,
+  endDrag,
+  onDragEnded,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
 
 export class InputHandler {
-  private down: { x: number; y: number } | null = null;
+  private down: { x: number; y: number; clientX: number; clientY: number } | null = null;
   private dragging = false;
-  private dropTimer: number | undefined;
   private hoverTimer: number | undefined;
   private posTimer: number | undefined;
+
+  // Grace timer after drag-ended while above floor → switch to fall if not clicked again
+  private hangGraceTimer: number | undefined;
+  private hangGraceMs = 1500; // ms before grace expires and fall starts
 
   constructor(
     private anim: Animator,
@@ -39,13 +48,30 @@ export class InputHandler {
     this.bindHover();
     this.bindWindowMoved();
     this.bindContextMenu();
+    this.bindPhysicsEvents();
   }
+
+  // ── Click / double-click ───────────────────────────────────────────────────
 
   private async onClick() {
     const now = Date.now();
     recordInteraction(now);
     state.clicks.push(now);
     while (state.clicks.length && now - state.clicks[0] > 5000) state.clicks.shift();
+
+    // While hanging: double-click arms copter (handled in hangGrace double-click path).
+    // Single click during hang: just react.
+    if (state.mode === "hanging" || state.mode === "falling") {
+      // Abort grace timer — user is interacting
+      window.clearTimeout(this.hangGraceTimer);
+      // Double-click during hang/fall → future copter deploy (Commit B).
+      // For now, single-click just says something.
+      if (state.mode === "hanging") {
+        say("Whoa! I'm up here!", "😮", 1800);
+      }
+      recordInteraction(now);
+      return;
+    }
 
     if (state.mode === "sleeping") {
       this.mood.woken();
@@ -103,6 +129,8 @@ export class InputHandler {
     }
   }
 
+  // ── Pickup / carry / drop ──────────────────────────────────────────────────
+
   private async beginCarry() {
     recordInteraction();
     setMode("carried");
@@ -117,62 +145,106 @@ export class InputHandler {
       hour: new Date().getHours(),
     });
     say(reply.text, reply.emote || "❗", reply.durationMs);
-    this.armDropTimer(1500);
   }
 
-  private armDropTimer(ms: number) {
-    window.clearTimeout(this.dropTimer);
-    this.dropTimer = window.setTimeout(() => this.dropped(), ms);
-  }
-
-  private async dropped() {
-    if (state.mode !== "carried") return;
+  private async dropped(aboveFloor: boolean, wx: number, wy: number) {
+    if (state.mode !== "carried" && state.mode !== "hanging") return;
     dbLogEvent("drop");
-    const reply = await this.brain.respond({
-      trigger: "drop",
-      moodLabel: this.mood.label(),
-      energy: this.mood.s.energy,
-      hour: new Date().getHours(),
-    });
-    say(reply.text, reply.emote, reply.durationMs);
-    fx.bounce();
-    this.behaviors.act("cozy", 2);
+
+    if (aboveFloor) {
+      // Start hang sequence
+      this.behaviors.startHang(wx, wy);
+    } else {
+      // Landed on the floor directly
+      const reply = await this.brain.respond({
+        trigger: "drop",
+        moodLabel: this.mood.label(),
+        energy: this.mood.s.energy,
+        hour: new Date().getHours(),
+      });
+      say(reply.text, reply.emote, reply.durationMs);
+      fx.bounce();
+      this.behaviors.act("cozy", 2);
+    }
   }
+
+  // ── Pointer binding ────────────────────────────────────────────────────────
 
   private bindPointer() {
-    petEl.addEventListener("pointerdown", (e) => {
+    petEl.addEventListener("pointerdown", async (e) => {
       if (e.button !== 0) return;
-      this.down = { x: e.clientX, y: e.clientY };
+      this.down = { x: e.screenX, y: e.screenY, clientX: e.clientX, clientY: e.clientY };
       this.dragging = false;
-      setDragging(false);
-    });
 
-    window.addEventListener("pointermove", (e) => {
-      if (!this.down || this.dragging) return;
-      if (Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 5) {
-        this.dragging = true;
-        setDragging(true);
-        setDragState(true);
-        this.down = null;
-        this.beginCarry();
-        startDragging();
+      // If currently hanging: start grace timer for double-click / copter
+      if (state.mode === "hanging") {
+        window.clearTimeout(this.hangGraceTimer);
+        // A fresh pointerdown during hang resets the grace window
       }
     });
 
-    window.addEventListener("pointerup", () => {
-      if (this.down && !this.dragging) this.onClick();
+    window.addEventListener("pointermove", async (e) => {
+      if (!this.down || this.dragging) return;
+      if (Math.hypot(e.screenX - this.down.x, e.screenY - this.down.y) > 5) {
+        this.dragging = true;
+        setDragging(true);
+        this.down = null;
+        window.clearTimeout(this.hangGraceTimer);
+
+        // Read window metrics for Rust
+        const [pos, size, wa] = await Promise.all([
+          getWindowPosition(),
+          getWindowSize(),
+          getCurrentWorkArea(),
+        ]);
+        const floor = wa ? wa.y + wa.height : state.floorY;
+        const offX = e.screenX - pos.x; // physical px
+        const offY = e.screenY - pos.y;
+        const winH = size.height;
+
+        setDragState(true); // legacy compat
+        await beginDrag(offX, offY, floor, winH);
+        this.beginCarry();
+      }
+    });
+
+    window.addEventListener("pointerup", async () => {
+      const wasDown = !!this.down;
+      const wasJustClicking = wasDown && !this.dragging;
       this.down = null;
+
+      if (wasJustClicking) {
+        this.onClick();
+      }
+
       if (this.dragging) {
         this.dragging = false;
         setDragging(false);
         setDragState(false);
-        syncHitRects();
+        // Tell Rust to end drag (Rust may have already done so via button-check).
+        // endDrag() is safe to call even after Rust already ended it.
+        endDrag();
       } else {
         setDragging(false);
         setDragState(false);
       }
     });
   }
+
+  // ── Physics events ─────────────────────────────────────────────────────────
+
+  /** "drag-ended" fires from Rust when mouse button is released (or failsafe). */
+  private bindPhysicsEvents() {
+    onDragEnded(async ({ above_floor, window_x, window_y }) => {
+      if (!this.dragging && state.mode !== "carried") return; // stale event
+      this.dragging = false;
+      setDragging(false);
+      setDragState(false);
+      await this.dropped(above_floor, window_x, window_y);
+    });
+  }
+
+  // ── Hover ──────────────────────────────────────────────────────────────────
 
   private bindHover() {
     petEl.addEventListener("pointerenter", () => {
@@ -196,6 +268,8 @@ export class InputHandler {
     petEl.addEventListener("pointerleave", () => window.clearTimeout(this.hoverTimer));
   }
 
+  // ── Window moved ───────────────────────────────────────────────────────────
+
   private bindWindowMoved() {
     onWindowMoved(() => {
       window.clearTimeout(this.posTimer);
@@ -203,9 +277,10 @@ export class InputHandler {
         const p = await getWindowPosition();
         saveLocalPosition(p.x, p.y);
       }, 600);
-      if (state.mode === "carried") this.armDropTimer(220);
     });
   }
+
+  // ── Context menu ───────────────────────────────────────────────────────────
 
   private showStats() {
     const s = this.mood.s;

@@ -70,8 +70,94 @@ export async function getScaleFactor(): Promise<number> {
   return await win.scaleFactor();
 }
 
-export async function startDragging(): Promise<void> {
-  await win.startDragging();
+// ── Rust-side physics commands ────────────────────────────────────────────────
+
+/** Tell Rust to start the drag loop.
+ *  @param offsetX  cursor X minus window left (physical px)
+ *  @param offsetY  cursor Y minus window top  (physical px)
+ *  @param floorY   work-area bottom            (physical px)
+ *  @param winH     window height               (physical px)
+ */
+export async function beginDrag(
+  offsetX: number,
+  offsetY: number,
+  floorY: number,
+  winH: number
+): Promise<void> {
+  await invoke("begin_drag", {
+    offsetX: Math.round(offsetX),
+    offsetY: Math.round(offsetY),
+    floorY: Math.round(floorY),
+    winH: Math.round(winH),
+  });
+}
+
+/** Tell Rust to end an active drag early (JS pointerup path). */
+export async function endDrag(): Promise<void> {
+  await invoke("end_drag");
+}
+
+/**
+ * Tell Rust to start free-fall from the current position.
+ * @param velYInitial  initial downward velocity (physical px/s)
+ * @param floorY       work-area bottom (physical px)
+ * @param winH         window height (physical px)
+ * @param scale        DPI scale factor
+ */
+export async function beginFall(
+  velYInitial: number,
+  floorY: number,
+  winH: number,
+  scale: number
+): Promise<void> {
+  await invoke("begin_fall", {
+    velYInitial,
+    floorY: Math.round(floorY),
+    winH: Math.round(winH),
+    scale,
+  });
+}
+
+/** Abort any active physics immediately (hide/DND path). */
+export async function abortPhysics(): Promise<void> {
+  await invoke("abort_physics");
+}
+
+// ── Physics events from Rust ──────────────────────────────────────────────────
+
+export interface DragEndedPayload {
+  window_x: number;
+  window_y: number;
+  above_floor: boolean;
+}
+
+export interface LandedPayload {
+  window_x: number;
+  window_y: number;
+}
+
+export interface PhysPosPayload {
+  x: number;
+  y: number;
+  vel_y: number;
+}
+
+export async function onDragEnded(
+  handler: (p: DragEndedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<DragEndedPayload>("drag-ended", (e) => handler(e.payload));
+}
+
+export async function onPhysicsLanded(
+  handler: (p: LandedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<LandedPayload>("physics-landed", (e) => handler(e.payload));
+}
+
+export async function onPhysicsPos(
+  handler: (p: PhysPosPayload) => void
+): Promise<UnlistenFn> {
+  return listen<PhysPosPayload>("physics-pos", (e) => handler(e.payload));
 }
 
 export async function hideWindow(): Promise<void> {

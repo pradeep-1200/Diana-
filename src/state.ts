@@ -1,6 +1,6 @@
 // Centralized state container for Diana Pet
 
-export type Mode = "idle" | "walking" | "sleeping" | "dancing" | "carried" | "busy";
+export type Mode = "idle" | "walking" | "sleeping" | "dancing" | "carried" | "busy" | "hanging" | "falling";
 
 export interface AppState {
   mode: Mode;
@@ -17,6 +17,12 @@ export interface AppState {
   clicks: number[];
   walkToken: number;
   lastModeChange: number;
+  /** Work-area floor in physical pixels — cached after startup and on resize. */
+  floorY: number;
+  /** Physical window height, cached alongside floorY. */
+  winH: number;
+  /** DPI scale factor, cached for Rust physics commands. */
+  scaleFactor: number;
 }
 
 export const state: AppState = {
@@ -34,6 +40,9 @@ export const state: AppState = {
   clicks: [],
   walkToken: 0,
   lastModeChange: Date.now(),
+  floorY: 0,
+  winH: 0,
+  scaleFactor: 1,
 };
 
 type StateListener = (state: AppState) => void;

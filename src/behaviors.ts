@@ -14,12 +14,19 @@ import {
   setWindowPosition,
   getUserIdleMs,
   logDecision,
+  beginFall,
+  abortPhysics,
+  onPhysicsLanded,
+  LandedPayload,
 } from "./platform";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const rand = (a: number, b: number) => a + Math.random() * (b - a);
 export const hour = () => new Date().getHours();
 export const isLateNight = () => hour() < 5;
+
+/** ms the hang clip plays before gravity starts (gives user time to double-click for copter). */
+const HANG_GRACE_MS = 1500;
 
 let decideTimer: number | undefined;
 
@@ -209,6 +216,102 @@ export class Behaviors {
     recordInteraction();
     if (state.mode === "sleeping") this.wakeUp();
     else this.startNap();
+  };
+
+  // ── Hang / Fall / Land ──────────────────────────────────────────────────────
+
+  /**
+   * Called by InputHandler after drag-ended with above_floor=true.
+   * Plays the "hang" clip (extras sheet), starts grace window.
+   * If no double-click within graceMs → start fall.
+   * Double-click path (Commit B) will call deployFlight() instead.
+   */
+  startHang = async (wx: number, wy: number) => {
+    nextWalkToken();
+    setMode("hanging");
+    logDecision(`startHang() wx=${wx} wy=${wy}`);
+
+    const reply = await this.brain.respond({
+      trigger: "pickup",
+      moodLabel: this.mood.label(),
+      energy: this.mood.s.energy,
+      hour: hour(),
+    });
+    say(reply.text, reply.emote || "😮", reply.durationMs);
+    this.anim.playExtras("hang");
+
+    // Arm fall after grace window (1.5 s by default)
+    this._hangGraceTimer = window.setTimeout(() => this._startFall(), HANG_GRACE_MS);
+  };
+
+  cancelHang() {
+    window.clearTimeout(this._hangGraceTimer);
+  }
+
+  private _hangGraceTimer: number | undefined;
+
+  private async _startFall() {
+    if (state.mode !== "hanging") return;
+    setMode("falling");
+    logDecision("_startFall() beginning Rust-driven gravity");
+
+    // Show falling animation
+    this.anim.playExtras("fall");
+
+    const [wa, size] = await Promise.all([
+      getCurrentWorkArea(),
+      getWindowSize(),
+    ]);
+    if (!wa) return;
+    const floorY = wa.y + wa.height;
+    const winH = size.height;
+    state.floorY = floorY;
+    state.winH = winH;
+    state.scaleFactor = wa.scaleFactor;
+
+    await beginFall(0, floorY, winH, wa.scaleFactor);
+
+    // Listen for landing (one-shot, using statically-imported onPhysicsLanded)
+    this._landUnlisten?.();
+    this._landUnlisten = await onPhysicsLanded((p) => this.onLanded(p));
+  }
+
+  private _landUnlisten?: () => void;
+
+  /** Called when Rust thread emits physics-landed. */
+  onLanded = async (_p: LandedPayload) => {
+    this._landUnlisten?.();
+    this._landUnlisten = undefined;
+    if (state.mode !== "falling") return;
+    setMode("busy");
+    logDecision("onLanded() playing land clip");
+    say("Ow... hehe. Again?", "🌟", 2000);
+    await new Promise<void>((resolve) =>
+      this.anim.playExtras("land", { loops: 1, onDone: resolve })
+    );
+    this.toIdle();
+  };
+
+  /**
+   * Immediately snap Diana to the floor without animation.
+   * Used when hide/DND/fullscreen fires during hang or fall.
+   */
+  emergencyToFloor = async () => {
+    window.clearTimeout(this._hangGraceTimer);
+    this._landUnlisten?.();
+    this._landUnlisten = undefined;
+    await abortPhysics();
+
+    // Place on floor
+    const [wa, size] = await Promise.all([
+      getCurrentWorkArea(),
+      getWindowSize(),
+    ]);
+    if (wa) {
+      const pos = await getWindowPosition();
+      await setWindowPosition(pos.x, wa.y + wa.height - size.height);
+    }
+    // toIdle() will be called when the window becomes visible again
   };
 
   wander = async () => {
@@ -418,8 +521,13 @@ export class Behaviors {
       return;
     }
 
-    // 4. Non-idle mode watchdog
+    // 4. Non-idle mode watchdog (skip for physics-owned modes)
     if (state.mode !== "idle") {
+      // hanging/falling are owned by physics thread — do not interrupt
+      if (state.mode === "hanging" || state.mode === "falling") {
+        logDecision(`decide() skipping watchdog: mode=${state.mode} (physics-owned)`);
+        return;
+      }
       const now = Date.now();
       const inCurrentMode = now - (state.lastModeChange || now);
       if (inCurrentMode > 10000 && state.mode !== "carried") {
