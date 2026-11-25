@@ -203,6 +203,134 @@ fn bring_diana_back(app: &AppHandle) {
     let _ = app.emit("pet-visible", true);
 }
 
+/// Requirement D: Automated self-test harness activated by DIANA_SELFTEST=1.
+/// Writes PASS/FAIL report to {app_data_dir}/selftest.log and exits cleanly.
+fn spawn_selftest(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("diana-selftest".into())
+        .spawn(move || {
+            use std::io::Write;
+            use std::time::Duration;
+
+            let mut lines: Vec<String> = Vec::new();
+            let mut all_ok = true;
+            let mut record = |name: &str, ok: bool, detail: String| {
+                let tag = if ok { "PASS" } else { "FAIL" };
+                if !ok {
+                    all_ok = false;
+                }
+                let msg = format!("[{}] {} — {}", tag, name, detail);
+                eprintln!("[selftest] {}", msg);
+                lines.push(msg);
+            };
+
+            // Give WebView / main.ts time to initialize startWatchdog() and placeInitially()
+            std::thread::sleep(Duration::from_millis(2000));
+
+            let Some(w) = app.get_webview_window("main") else {
+                record("INIT", false, "main window missing".into());
+                app.exit(1);
+                return;
+            };
+
+            let monitors = w.available_monitors().unwrap_or_default();
+            let in_any_wa = |px: i32, py: i32, pw: i32, ph: i32| -> bool {
+                let cx = px + pw / 2;
+                let cy = py + ph / 2;
+                monitors.iter().any(|m| {
+                    let wa = m.work_area();
+                    cx >= wa.position.x
+                        && cx <= wa.position.x + wa.size.width as i32
+                        && cy >= wa.position.y
+                        && cy <= wa.position.y + wa.size.height as i32
+                })
+            };
+
+            // Test A: Requirement A (toggle_visibility / snap_to_floor_if_offscreen)
+            let _ = w.set_position(tauri::PhysicalPosition::new(-20000_i32, 20000_i32));
+            std::thread::sleep(Duration::from_millis(120));
+            toggle_visibility(&app); // hide
+            std::thread::sleep(Duration::from_millis(100));
+            toggle_visibility(&app); // show -> calls snap_to_floor_if_offscreen
+            std::thread::sleep(Duration::from_millis(200));
+            let pos_a = w.outer_position().unwrap_or(tauri::PhysicalPosition::new(-99999, -99999));
+            let size_a = w.outer_size().unwrap_or(tauri::PhysicalSize::new(0, 0));
+            let vis_a = w.is_visible().unwrap_or(false);
+            let ok_a = vis_a && in_any_wa(pos_a.x, pos_a.y, size_a.width as i32, size_a.height as i32);
+            record(
+                "REQ_A_OFFSCREEN_SHOW",
+                ok_a,
+                format!("visible={} pos=({},{}) size={}x{}", vis_a, pos_a.x, pos_a.y, size_a.width, size_a.height),
+            );
+
+            // Test B: Requirement B (bring_diana_back from bad pos + bad size)
+            let _ = w.set_size(tauri::PhysicalSize::new(40_u32, 40_u32));
+            let _ = w.set_position(tauri::PhysicalPosition::new(50000_i32, -20000_i32));
+            std::thread::sleep(Duration::from_millis(120));
+            bring_diana_back(&app);
+            std::thread::sleep(Duration::from_millis(250));
+            let pos_b = w.outer_position().unwrap_or(tauri::PhysicalPosition::new(-99999, -99999));
+            let size_b = w.outer_size().unwrap_or(tauri::PhysicalSize::new(0, 0));
+            let vis_b = w.is_visible().unwrap_or(false);
+            let ok_b = vis_b
+                && size_b.width >= 200
+                && size_b.height >= 280
+                && in_any_wa(pos_b.x, pos_b.y, size_b.width as i32, size_b.height as i32);
+            record(
+                "REQ_B_BRING_DIANA_BACK",
+                ok_b,
+                format!("visible={} pos=({},{}) size={}x{}", vis_b, pos_b.x, pos_b.y, size_b.width, size_b.height),
+            );
+
+            // Test C: Requirement C (monitor-union sanity check rejects insane positions)
+            let reject_neg = !hittest::is_within_monitors_union(-20000, 20000, &monitors, 250);
+            let reject_pos = !hittest::is_within_monitors_union(50000, 50000, &monitors, 250);
+            let accept_valid = monitors.first().map(|m| {
+                let wa = m.work_area();
+                hittest::is_within_monitors_union(wa.position.x + 100, wa.position.y + 100, &monitors, 250)
+            }).unwrap_or(false);
+            let ht_idle = app.try_state::<HitTester>().map(|h| h.is_phys_idle()).unwrap_or(false);
+            let ok_c = reject_neg && reject_pos && accept_valid && ht_idle;
+            record(
+                "REQ_C_DRAG_SANITY_CLAMP",
+                ok_c,
+                format!("reject_neg={} reject_pos={} accept_valid={} phys_idle={}", reject_neg, reject_pos, accept_valid, ht_idle),
+            );
+
+            // Test D: 2-second JS watchdog recovery from (-20000, 20000) without calling Rust snap
+            let _ = w.set_position(tauri::PhysicalPosition::new(-20000_i32, 20000_i32));
+            std::thread::sleep(Duration::from_millis(3200));
+            let pos_d = w.outer_position().unwrap_or(tauri::PhysicalPosition::new(-99999, -99999));
+            let size_d = w.outer_size().unwrap_or(tauri::PhysicalSize::new(0, 0));
+            let ok_d = in_any_wa(pos_d.x, pos_d.y, size_d.width as i32, size_d.height as i32);
+            record(
+                "REQ_D_2S_WATCHDOG",
+                ok_d,
+                format!("pos=({},{}) size={}x{}", pos_d.x, pos_d.y, size_d.width, size_d.height),
+            );
+
+            let summary = if all_ok { "SELFTEST SUMMARY: ALL PASS" } else { "SELFTEST SUMMARY: FAILED" };
+            lines.push(summary.to_string());
+            eprintln!("[selftest] {}", summary);
+
+            let log_path = match app.path().app_data_dir() {
+                Ok(dir) => {
+                    let _ = std::fs::create_dir_all(&dir);
+                    dir.join("selftest.log")
+                }
+                Err(_) => std::path::PathBuf::from("selftest.log"),
+            };
+            if let Ok(mut f) = std::fs::File::create(&log_path) {
+                for l in &lines {
+                    let _ = writeln!(f, "{}", l);
+                }
+                let _ = f.flush();
+            }
+            app.exit(if all_ok { 0 } else { 1 });
+        })
+        .expect("failed to spawn selftest thread");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let hittest = HitTester::new();
@@ -294,6 +422,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            if std::env::var("DIANA_SELFTEST").map(|v| v == "1").unwrap_or(false) {
+                spawn_selftest(app.handle().clone());
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
