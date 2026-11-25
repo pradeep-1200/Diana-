@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-// â”€â”€ Public data types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Public data types ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub struct HitRect {
@@ -30,49 +30,57 @@ pub struct LandedPayload {
     pub window_y: i32,
 }
 
-// â”€â”€ Physics mode (shared via Mutex) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Physics mode (shared via Mutex) ──────────────────────────────────────────
 
 #[derive(Debug)]
 enum PhysMode {
     Idle,
     Drag {
-        offset_x: i32,  // cursor_x - window_x at grab time (physical px)
-        offset_y: i32,  // cursor_y - window_y at grab time
-        floor_y: i32,   // max window bottom edge (physical px)
-        win_h: i32,     // physical window height
+        offset_x: i32,
+        offset_y: i32,
+        floor_y: i32,
+        win_h: i32,
         started: Instant,
     },
     Fall {
-        vel_y: f64,    // physical px/s, positive = down
-        floor_y: i32,  // max window bottom edge (physical px)
+        vel_y: f64,
+        floor_y: i32,
         win_h: i32,
-        scale: f64,    // DPI scale factor, for gravity constant
+        scale: f64,
+    },
+    Flight {
+        floor_y: i32,
+        win_h: i32,
+        win_w: i32,
+        scale: f64,
+        started: Instant,
+        /// Max flight duration before auto-retract
+        max_ms: u64,
     },
 }
 
-// â”€â”€ HitTester public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── HitTester public API ──────────────────────────────────────────────────────
 
 pub struct HitTester {
     hit_rects: Arc<Mutex<Vec<HitRect>>>,
     is_visible: Arc<AtomicBool>,
-    // PHYS_MODE_FLAG: 0=Idle, 1=Drag, 2=Fall
     phys_flag: Arc<AtomicU8>,
     phys_mode: Arc<Mutex<PhysMode>>,
-    // Shared floor_y so JS can update without replacing the whole mode
     #[allow(dead_code)]
     floor_y: Arc<AtomicI32>,
-    // Set by Rust when dragging is active (mirrors is_dragging for hit-test)
     is_dragging: Arc<AtomicBool>,
-    // Set when falling: suppress normal hit-rect filtering (always hittable)
     is_falling: Arc<AtomicBool>,
-    // Last known-valid window position (physical px), updated each drag tick
     last_valid_x: Arc<AtomicI32>,
     last_valid_y: Arc<AtomicI32>,
+    // Flight target position (physical px), set by JS via set_flight_target
+    flight_target_x: Arc<AtomicI32>,
+    flight_target_y: Arc<AtomicI32>,
 }
 
 const PHYS_IDLE: u8 = 0;
 const PHYS_DRAG: u8 = 1;
 const PHYS_FALL: u8 = 2;
+const PHYS_FLIGHT: u8 = 3;
 
 impl Default for HitTester {
     fn default() -> Self {
@@ -92,6 +100,8 @@ impl HitTester {
             is_falling: Arc::new(AtomicBool::new(false)),
             last_valid_x: Arc::new(AtomicI32::new(0)),
             last_valid_y: Arc::new(AtomicI32::new(0)),
+            flight_target_x: Arc::new(AtomicI32::new(0)),
+            flight_target_y: Arc::new(AtomicI32::new(0)),
         }
     }
 
@@ -104,12 +114,10 @@ impl HitTester {
     pub fn set_visible(&self, visible: bool) {
         self.is_visible.store(visible, Ordering::Relaxed);
         if !visible {
-            // Abort any active physics immediately
             self.abort_physics();
         }
     }
 
-    /// Abort drag/fall silently (hide/DND path â€” JS will place Diana on floor itself).
     pub fn abort_physics(&self) {
         self.phys_flag.store(PHYS_IDLE, Ordering::Release);
         if let Ok(mut lock) = self.phys_mode.lock() {
@@ -128,6 +136,8 @@ impl HitTester {
         let is_falling = Arc::clone(&self.is_falling);
         let last_valid_x = Arc::clone(&self.last_valid_x);
         let last_valid_y = Arc::clone(&self.last_valid_y);
+        let flight_target_x = Arc::clone(&self.flight_target_x);
+        let flight_target_y = Arc::clone(&self.flight_target_y);
 
         thread::Builder::new()
             .name("diana-physics".into())
@@ -144,9 +154,13 @@ impl HitTester {
 
                     let mut last_ignored: Option<bool> = None;
                     let mut last_emit_ticker: u32 = 0;
+                    // Flight smooth position (sub-pixel accumulation)
+                    let mut flight_x: f64 = 0.0;
+                    let mut flight_y: f64 = 0.0;
+                    let mut flight_vel_x: f64 = 0.0;
+                    let mut flight_vel_y: f64 = 0.0;
 
                     loop {
-                        // â”€â”€ Visibility gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         if !is_visible.load(Ordering::Relaxed) {
                             thread::sleep(Duration::from_millis(500));
                             last_ignored = None;
@@ -160,64 +174,41 @@ impl HitTester {
 
                         let flag = phys_flag.load(Ordering::Acquire);
 
-                        // â”€â”€ DRAG mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        // ── DRAG mode ─────────────────────────────────────────
                         if flag == PHYS_DRAG {
                             is_dragging.store(true, Ordering::Relaxed);
                             let _ = window.set_ignore_cursor_events(false);
                             last_ignored = Some(false);
 
-                            // Read drag params
                             let (offset_x, offset_y, floor_y, win_h, started) = {
                                 let lock = phys_mode.lock().unwrap();
                                 match &*lock {
                                     PhysMode::Drag {
-                                        offset_x,
-                                        offset_y,
-                                        floor_y,
-                                        win_h,
-                                        started,
+                                        offset_x, offset_y, floor_y, win_h, started,
                                     } => (*offset_x, *offset_y, *floor_y, *win_h, *started),
-                                    _ => {
-                                        thread::sleep(Duration::from_millis(16));
-                                        continue;
-                                    }
+                                    _ => { thread::sleep(Duration::from_millis(16)); continue; }
                                 }
                             };
 
-                            // Failsafe: max 60 s
                             let timed_out = started.elapsed().as_secs() > 60;
-
-                            // Check mouse button via Win32 (Rust-side release detection)
-                            let btn_down =
-                                unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16) & 0x8000 != 0 };
+                            let btn_down = unsafe {
+                                (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16) & 0x8000 != 0
+                            };
 
                             if timed_out || !btn_down {
-                                // End drag â€” read current window position
-                                let (wx, wy) = window
-                                    .outer_position()
-                                    .map(|p| (p.x, p.y))
-                                    .unwrap_or((0, 0));
+                                let (wx, wy) = window.outer_position()
+                                    .map(|p| (p.x, p.y)).unwrap_or((0, 0));
                                 let above_floor = wy + win_h < floor_y;
-
                                 phys_flag.store(PHYS_IDLE, Ordering::Release);
-                                if let Ok(mut lock) = phys_mode.lock() {
-                                    *lock = PhysMode::Idle;
-                                }
+                                if let Ok(mut lock) = phys_mode.lock() { *lock = PhysMode::Idle; }
                                 is_dragging.store(false, Ordering::Relaxed);
-
-                                let _ = app.emit(
-                                    "drag-ended",
-                                    DragEndedPayload {
-                                        window_x: wx,
-                                        window_y: wy,
-                                        above_floor,
-                                    },
-                                );
+                                let _ = app.emit("drag-ended", DragEndedPayload {
+                                    window_x: wx, window_y: wy, above_floor,
+                                });
                                 thread::sleep(Duration::from_millis(16));
                                 continue;
                             }
 
-                            // Move window: cursor - grab offset, clamped to floor
                             let mut cursor = POINT::default();
                             if unsafe { GetCursorPos(&mut cursor).is_ok() } {
                                 let new_x = cursor.x - offset_x;
@@ -225,61 +216,42 @@ impl HitTester {
                                 let max_y = floor_y - win_h;
                                 let new_y = raw_y.min(max_y);
 
-                                // â”€â”€ Requirement C: sanity check drag position â”€â”€
-                                // Reject wildly out-of-bounds positions (e.g. off all monitors).
-                                // A simple guard: x must be within [-8000, 32000], y within [-2000, 32000].
-                                // This catches the logicalâ†’physical pixel mismatch causing x=-15000 etc.
+                                // Sanity check: reject wildly out-of-bounds positions
                                 let sane = new_x > -8000 && new_x < 32000
                                     && new_y > -2000 && new_y < 32000;
 
                                 if sane {
                                     last_valid_x.store(new_x, Ordering::Relaxed);
                                     last_valid_y.store(new_y, Ordering::Relaxed);
-
                                     if let Ok(hwnd) = window.hwnd() {
                                         unsafe {
                                             let _ = SetWindowPos(
-                                                HWND(hwnd.0),
-                                                None,
-                                                new_x,
-                                                new_y,
-                                                0,
-                                                0,
+                                                HWND(hwnd.0), None, new_x, new_y, 0, 0,
                                                 SWP_NOACTIVATE | SWP_NOZORDER,
                                             );
                                         }
                                     }
                                 } else {
-                                    // Reject: position is insane â€” keep last valid pos
                                     let lx = last_valid_x.load(Ordering::Relaxed);
                                     let ly = last_valid_y.load(Ordering::Relaxed);
                                     eprintln!(
-                                        "[diana-physics] WARN: rejected drag pos ({},{}) â€” keeping last valid ({},{}). cursor=({},{}) offset=({},{})",
+                                        "[diana-physics] WARN: rejected drag pos ({},{}) — keeping ({},{}). cursor=({},{}) offset=({},{})",
                                         new_x, new_y, lx, ly, cursor.x, cursor.y, offset_x, offset_y
                                     );
-                                    // End drag cleanly to prevent repeated badness
                                     let above_floor = ly + win_h < floor_y;
                                     phys_flag.store(PHYS_IDLE, Ordering::Release);
-                                    if let Ok(mut lock) = phys_mode.lock() {
-                                        *lock = PhysMode::Idle;
-                                    }
+                                    if let Ok(mut lock) = phys_mode.lock() { *lock = PhysMode::Idle; }
                                     is_dragging.store(false, Ordering::Relaxed);
-                                    let _ = app.emit(
-                                        "drag-ended",
-                                        DragEndedPayload {
-                                            window_x: lx,
-                                            window_y: ly,
-                                            above_floor,
-                                        },
-                                    );
+                                    let _ = app.emit("drag-ended", DragEndedPayload {
+                                        window_x: lx, window_y: ly, above_floor,
+                                    });
                                 }
                             }
-
                             thread::sleep(Duration::from_millis(16));
                             continue;
                         }
 
-                        // â”€â”€ FALL mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        // ── FALL mode ─────────────────────────────────────────
                         if flag == PHYS_FALL {
                             is_dragging.store(false, Ordering::Relaxed);
                             is_falling.store(true, Ordering::Relaxed);
@@ -287,98 +259,149 @@ impl HitTester {
                             last_ignored = Some(false);
 
                             let dt = 0.016_f64;
-
                             let (floor_y, win_h, _scale, new_vel) = {
                                 let mut lock = phys_mode.lock().unwrap();
                                 match &mut *lock {
-                                    PhysMode::Fall {
-                                        vel_y,
-                                        floor_y,
-                                        win_h,
-                                        scale,
-                                    } => {
-                                        // Gravity: 2000 logical px/sÂ² Ã— scale = physical px/sÂ²
+                                    PhysMode::Fall { vel_y, floor_y, win_h, scale } => {
                                         let g = 2000.0 * *scale;
-                                        // Terminal velocity: 1400 logical px/s
                                         let term = 1400.0 * *scale;
                                         *vel_y = (*vel_y + g * dt).min(term);
                                         (*floor_y, *win_h, *scale, *vel_y)
                                     }
-                                    _ => {
-                                        thread::sleep(Duration::from_millis(16));
-                                        continue;
-                                    }
+                                    _ => { thread::sleep(Duration::from_millis(16)); continue; }
                                 }
                             };
 
                             let dy = (new_vel * dt).round() as i32;
-
                             if let Ok(pos) = window.outer_position() {
                                 let new_y = pos.y + dy;
                                 let max_y = floor_y - win_h;
-
                                 if new_y >= max_y {
-                                    // Landed
                                     let _ = window.hwnd().map(|hwnd| unsafe {
                                         let _ = SetWindowPos(
-                                            HWND(hwnd.0),
-                                            None,
-                                            pos.x,
-                                            max_y,
-                                            0,
-                                            0,
+                                            HWND(hwnd.0), None, pos.x, max_y, 0, 0,
                                             SWP_NOACTIVATE | SWP_NOZORDER,
                                         );
                                     });
-
                                     phys_flag.store(PHYS_IDLE, Ordering::Release);
-                                    if let Ok(mut lock) = phys_mode.lock() {
-                                        *lock = PhysMode::Idle;
-                                    }
+                                    if let Ok(mut lock) = phys_mode.lock() { *lock = PhysMode::Idle; }
                                     is_falling.store(false, Ordering::Relaxed);
-
-                                    let _ = app.emit(
-                                        "physics-landed",
-                                        LandedPayload {
-                                            window_x: pos.x,
-                                            window_y: max_y,
-                                        },
-                                    );
+                                    let _ = app.emit("physics-landed", LandedPayload {
+                                        window_x: pos.x, window_y: max_y,
+                                    });
                                 } else {
                                     let _ = window.hwnd().map(|hwnd| unsafe {
                                         let _ = SetWindowPos(
-                                            HWND(hwnd.0),
-                                            None,
-                                            pos.x,
-                                            new_y,
-                                            0,
-                                            0,
+                                            HWND(hwnd.0), None, pos.x, new_y, 0, 0,
                                             SWP_NOACTIVATE | SWP_NOZORDER,
                                         );
                                     });
-
-                                    // Emit position to JS at ~10 Hz (every 6th frame)
                                     last_emit_ticker = last_emit_ticker.wrapping_add(1);
                                     if last_emit_ticker % 6 == 0 {
-                                        let _ = app.emit(
-                                            "physics-pos",
-                                            serde_json::json!({
-                                                "x": pos.x,
-                                                "y": new_y,
-                                                "vel_y": new_vel,
-                                            }),
-                                        );
+                                        let _ = app.emit("physics-pos", serde_json::json!({
+                                            "x": pos.x, "y": new_y, "vel_y": new_vel,
+                                        }));
                                     }
                                 }
                             }
-
                             thread::sleep(Duration::from_millis(16));
                             continue;
                         }
 
-                        // â”€â”€ IDLE: normal hit-test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                        // ── FLIGHT mode (copter) ───────────────────────────────
+                        if flag == PHYS_FLIGHT {
+                            is_dragging.store(false, Ordering::Relaxed);
+                            is_falling.store(false, Ordering::Relaxed);
+                            let _ = window.set_ignore_cursor_events(false);
+                            last_ignored = Some(false);
+
+                            let (floor_y, win_h, win_w, scale, started, max_ms) = {
+                                let lock = phys_mode.lock().unwrap();
+                                match &*lock {
+                                    PhysMode::Flight { floor_y, win_h, win_w, scale, started, max_ms } => {
+                                        (*floor_y, *win_h, *win_w, *scale, *started, *max_ms)
+                                    }
+                                    _ => { thread::sleep(Duration::from_millis(16)); continue; }
+                                }
+                            };
+
+                            // Auto-retract after max_ms
+                            if started.elapsed().as_millis() as u64 >= max_ms {
+                                phys_flag.store(PHYS_IDLE, Ordering::Release);
+                                if let Ok(mut lock) = phys_mode.lock() { *lock = PhysMode::Idle; }
+                                let pos = window.outer_position().map(|p| (p.x, p.y)).unwrap_or((0, 0));
+                                let _ = app.emit("flight-ended", serde_json::json!({
+                                    "window_x": pos.0, "window_y": pos.1, "reason": "timeout"
+                                }));
+                                thread::sleep(Duration::from_millis(16));
+                                continue;
+                            }
+
+                            // Spring-ease toward flight target
+                            let tx = flight_target_x.load(Ordering::Relaxed) as f64;
+                            let ty = flight_target_y.load(Ordering::Relaxed) as f64;
+                            let dt = 0.016_f64;
+
+                            if let Ok(pos) = window.outer_position() {
+                                // Init flight pos on first tick
+                                if flight_x == 0.0 && flight_y == 0.0 {
+                                    flight_x = pos.x as f64;
+                                    flight_y = pos.y as f64;
+                                    flight_target_x.store(pos.x, Ordering::Relaxed);
+                                    flight_target_y.store(pos.y, Ordering::Relaxed);
+                                }
+
+                                // Spring: acc = k*(target-pos) - damping*vel, k=8, damping=0.85
+                                let k = 8.0_f64;
+                                let damp = 0.85_f64;
+                                let ax = k * (tx - flight_x) - damp * flight_vel_x;
+                                let ay = k * (ty - flight_y) - damp * flight_vel_y;
+                                flight_vel_x += ax * dt;
+                                flight_vel_y += ay * dt;
+                                flight_x += flight_vel_x * dt;
+                                flight_y += flight_vel_y * dt;
+
+                                // Clamp above floor, within monitor X bounds
+                                let min_y = -200_f64 * scale; // can go above taskbar
+                                let max_y = (floor_y - win_h) as f64;
+                                let min_x = -win_w as f64 / 2.0;
+                                let max_x = 32000_f64; // generous right bound
+                                flight_x = flight_x.clamp(min_x, max_x);
+                                flight_y = flight_y.clamp(min_y, max_y);
+
+                                let nx = flight_x.round() as i32;
+                                let ny = flight_y.round() as i32;
+
+                                if let Ok(hwnd) = window.hwnd() {
+                                    unsafe {
+                                        let _ = SetWindowPos(
+                                            HWND(hwnd.0), None, nx, ny, 0, 0,
+                                            SWP_NOACTIVATE | SWP_NOZORDER,
+                                        );
+                                    }
+                                }
+
+                                // Emit flight-tick at ~20Hz (every 3rd frame at 60Hz)
+                                last_emit_ticker = last_emit_ticker.wrapping_add(1);
+                                if last_emit_ticker % 3 == 0 {
+                                    let _ = app.emit("flight-tick", serde_json::json!({
+                                        "x": nx,
+                                        "y": ny,
+                                        "vel_x": flight_vel_x,
+                                        "vel_y": flight_vel_y,
+                                    }));
+                                }
+                            }
+                            thread::sleep(Duration::from_millis(16));
+                            continue;
+                        }
+
+                        // ── IDLE: normal hit-test ─────────────────────────────
                         is_dragging.store(false, Ordering::Relaxed);
                         is_falling.store(false, Ordering::Relaxed);
+                        // Reset flight state so next flight starts fresh
+                        flight_x = 0.0; flight_y = 0.0;
+                        flight_vel_x = 0.0; flight_vel_y = 0.0;
 
                         let (win_pos, win_size, scale_factor) = match (
                             window.outer_position(),
@@ -386,10 +409,7 @@ impl HitTester {
                             window.scale_factor(),
                         ) {
                             (Ok(p), Ok(s), Ok(sf)) => (p, s, sf),
-                            _ => {
-                                thread::sleep(Duration::from_millis(100));
-                                continue;
-                            }
+                            _ => { thread::sleep(Duration::from_millis(100)); continue; }
                         };
 
                         let mut cursor_pt = POINT::default();
@@ -411,20 +431,15 @@ impl HitTester {
 
                         let rects = hit_rects.lock().map(|g| g.clone()).unwrap_or_default();
                         let mut hit = false;
-
                         for r in &rects {
                             let r_left = win_left + (r.x * scale_factor).round() as i32;
                             let r_top = win_top + (r.y * scale_factor).round() as i32;
                             let r_right = r_left + (r.width * scale_factor).round() as i32;
                             let r_bottom = r_top + (r.height * scale_factor).round() as i32;
-
-                            if cursor_pt.x >= r_left
-                                && cursor_pt.x <= r_right
-                                && cursor_pt.y >= r_top
-                                && cursor_pt.y <= r_bottom
+                            if cursor_pt.x >= r_left && cursor_pt.x <= r_right
+                                && cursor_pt.y >= r_top && cursor_pt.y <= r_bottom
                             {
-                                hit = true;
-                                break;
+                                hit = true; break;
                             }
                         }
 
@@ -443,22 +458,16 @@ impl HitTester {
     }
 }
 
-// â”€â”€ Tauri commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Tauri commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn update_hit_rects(state: tauri::State<HitTester>, rects: Vec<HitRect>) {
     state.set_rects(rects);
 }
 
-/// Legacy no-op â€” kept so existing JS `set_drag_state` call compiles without
-/// changes until input.ts is updated in this commit.
 #[tauri::command]
 pub fn set_drag_state(_state: tauri::State<HitTester>, _dragging: bool) {}
 
-/// JS calls this when the user begins a drag.
-/// offset_x/offset_y: cursor position relative to the window's top-left corner
-/// (physical pixels). floor_y: bottom of the work area (physical px).
-/// win_h: current physical window height.
 #[tauri::command]
 pub fn begin_drag(
     state: tauri::State<HitTester>,
@@ -467,7 +476,6 @@ pub fn begin_drag(
     floor_y: i32,
     win_h: i32,
 ) {
-    // Guard: reject clearly insane offsets (would cause teleport)
     if offset_x < -4000 || offset_x > 8000 || offset_y < -2000 || offset_y > 8000 {
         eprintln!(
             "[diana-physics] WARN: begin_drag rejected insane offset ({},{}) floor={} winH={}",
@@ -477,61 +485,34 @@ pub fn begin_drag(
     }
     let mut lock = state.phys_mode.lock().unwrap();
     *lock = PhysMode::Drag {
-        offset_x,
-        offset_y,
-        floor_y,
-        win_h,
-        started: Instant::now(),
+        offset_x, offset_y, floor_y, win_h, started: Instant::now(),
     };
     state.phys_flag.store(PHYS_DRAG, Ordering::Release);
 }
 
-/// JS can call this to end the drag early (e.g. pointerup was received in JS
-/// before Rust detected it). Rust will still emit "drag-ended".
-/// Safe to call even if already ended.
 #[tauri::command]
 pub fn end_drag(app: AppHandle, state: tauri::State<HitTester>) {
     let flag = state.phys_flag.load(Ordering::Acquire);
-    if flag != PHYS_DRAG {
-        return;
-    }
+    if flag != PHYS_DRAG { return; }
     let (win_h, floor_y) = {
         let lock = state.phys_mode.lock().unwrap();
         match &*lock {
-            PhysMode::Drag {
-                floor_y, win_h, ..
-            } => (*floor_y, *win_h),
+            PhysMode::Drag { floor_y, win_h, .. } => (*floor_y, *win_h),
             _ => return,
         }
     };
-
     let (wx, wy) = app
         .get_webview_window("main")
         .and_then(|w| w.outer_position().ok())
         .map(|p| (p.x, p.y))
         .unwrap_or((0, 0));
-
     let above_floor = wy + win_h < floor_y;
-
     state.phys_flag.store(PHYS_IDLE, Ordering::Release);
-    if let Ok(mut lock) = state.phys_mode.lock() {
-        *lock = PhysMode::Idle;
-    }
+    if let Ok(mut lock) = state.phys_mode.lock() { *lock = PhysMode::Idle; }
     state.is_dragging.store(false, Ordering::Relaxed);
-
-    let _ = app.emit(
-        "drag-ended",
-        DragEndedPayload {
-            window_x: wx,
-            window_y: wy,
-            above_floor,
-        },
-    );
+    let _ = app.emit("drag-ended", DragEndedPayload { window_x: wx, window_y: wy, above_floor });
 }
 
-/// JS calls this to start free-fall from current window position.
-/// vel_y_initial: starting downward velocity (physical px/s), usually 0.
-/// floor_y: bottom of work area (physical px). scale: DPI scale factor.
 #[tauri::command]
 pub fn begin_fall(
     state: tauri::State<HitTester>,
@@ -541,18 +522,53 @@ pub fn begin_fall(
     scale: f64,
 ) {
     let mut lock = state.phys_mode.lock().unwrap();
-    *lock = PhysMode::Fall {
-        vel_y: vel_y_initial,
-        floor_y,
-        win_h,
-        scale,
-    };
+    *lock = PhysMode::Fall { vel_y: vel_y_initial, floor_y, win_h, scale };
     state.phys_flag.store(PHYS_FALL, Ordering::Release);
 }
 
-/// Abort any active physics (hide / DND / fullscreen path).
-/// JS must place Diana on the floor itself after calling this.
+/// JS calls this after the deploy animation finishes to start real Rust-driven flight.
+/// floor_y, win_h, win_w: physical pixels. max_ms: max flight duration.
+#[tauri::command]
+pub fn begin_flight(
+    state: tauri::State<HitTester>,
+    floor_y: i32,
+    win_h: i32,
+    win_w: i32,
+    scale: f64,
+    max_ms: u64,
+) {
+    let mut lock = state.phys_mode.lock().unwrap();
+    *lock = PhysMode::Flight {
+        floor_y, win_h, win_w, scale, started: Instant::now(), max_ms,
+    };
+    state.phys_flag.store(PHYS_FLIGHT, Ordering::Release);
+}
+
+/// JS calls this to update the copter's target position (physical px).
+/// Can be called anytime during flight to redirect Diana.
+#[tauri::command]
+pub fn set_flight_target(state: tauri::State<HitTester>, x: i32, y: i32) {
+    state.flight_target_x.store(x, Ordering::Relaxed);
+    state.flight_target_y.store(y, Ordering::Relaxed);
+}
+
+/// End flight early (double-click during flight, DND, etc.).
+#[tauri::command]
+pub fn end_flight(app: AppHandle, state: tauri::State<HitTester>) {
+    if state.phys_flag.load(Ordering::Acquire) != PHYS_FLIGHT { return; }
+    state.phys_flag.store(PHYS_IDLE, Ordering::Release);
+    if let Ok(mut lock) = state.phys_mode.lock() { *lock = PhysMode::Idle; }
+    let pos = app.get_webview_window("main")
+        .and_then(|w| w.outer_position().ok())
+        .map(|p| (p.x, p.y))
+        .unwrap_or((0, 0));
+    let _ = app.emit("flight-ended", serde_json::json!({
+        "window_x": pos.0, "window_y": pos.1, "reason": "early"
+    }));
+}
+
 #[tauri::command]
 pub fn abort_physics(state: tauri::State<HitTester>) {
+
     state.abort_physics();
 }

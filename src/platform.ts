@@ -114,6 +114,60 @@ export async function abortPhysics(): Promise<void> {
   await invoke("abort_physics");
 }
 
+// ── Copter flight commands ────────────────────────────────────────────────────
+
+export async function beginFlight(
+  floorY: number,
+  winH: number,
+  winW: number,
+  scale: number,
+  maxMs: number
+): Promise<void> {
+  await invoke("begin_flight", {
+    floorY: Math.round(floorY),
+    winH: Math.round(winH),
+    winW: Math.round(winW),
+    scale,
+    maxMs,
+  });
+}
+
+export async function setFlightTarget(x: number, y: number): Promise<void> {
+  await invoke("set_flight_target", {
+    x: Math.round(x),
+    y: Math.round(y),
+  });
+}
+
+export async function endFlight(): Promise<void> {
+  await invoke("end_flight");
+}
+
+export interface FlightTickPayload {
+  x: number;
+  y: number;
+  vel_x: number;
+  vel_y: number;
+}
+
+export interface FlightEndedPayload {
+  window_x: number;
+  window_y: number;
+  reason: string;
+}
+
+export async function onFlightTick(
+  handler: (p: FlightTickPayload) => void
+): Promise<UnlistenFn> {
+  return listen<FlightTickPayload>("flight-tick", (e) => handler(e.payload));
+}
+
+export async function onFlightEnded(
+  handler: (p: FlightEndedPayload) => void
+): Promise<UnlistenFn> {
+  return listen<FlightEndedPayload>("flight-ended", (e) => handler(e.payload));
+}
+
 // ── Physics events from Rust ──────────────────────────────────────────────────
 
 export interface DragEndedPayload {

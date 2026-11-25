@@ -78,6 +78,16 @@ export class InputHandler {
       return;
     }
 
+    // While flying: double-click cancels copter early
+    if ((state.mode as string) === "flying") {
+      if (now - state.lastClick < 450) {
+        state.lastClick = 0;
+        return this.behaviors.cancelFlight();
+      }
+      state.lastClick = now;
+      return;
+    }
+
     if (state.mode === "sleeping") {
       this.mood.woken();
       return this.behaviors.wakeUp();

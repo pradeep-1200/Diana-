@@ -19,6 +19,11 @@ import {
   abortPhysics,
   onPhysicsLanded,
   LandedPayload,
+  beginFlight,
+  setFlightTarget,
+  endFlight,
+  onFlightTick,
+  onFlightEnded,
 } from "./platform";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -28,8 +33,7 @@ export const isLateNight = () => hour() < 5;
 
 /** ms the hang clip plays before gravity starts (gives user time to double-click for copter). */
 const HANG_GRACE_MS = 1500;
-/** How long Diana flies before auto-retracting (ms). */
-const COPTER_FLY_MS = 6000;
+// COPTER_FLY_MS removed — real flight duration is now 45 s, controlled by Rust (Issue 4 fix)
 
 let decideTimer: number | undefined;
 
@@ -256,36 +260,145 @@ export class Behaviors {
 
   /**
    * Called by InputHandler on double-click during hang.
-   * Deploys the copter instead of falling.
+   * Issue 4 fix: Real Rust-driven copter flight with spring-ease physics,
+   * target tracking toward cursor, and tilt/mirror on the sprite.
+   * Previous stub just ran `await sleep(COPTER_FLY_MS)` with no movement.
    */
   async deployFlight() {
     if (state.mode !== "hanging") return;
     window.clearTimeout(this._hangGraceTimer);
     this._hangGraceTimer = undefined;
     setMode("flying");
-    logDecision("deployFlight() launching copter");
+    logDecision("deployFlight() launching copter (real Rust flight)");
 
     say("Whirr~ 🚁", "🚁", 2000);
-    // Play deploy animation (non-looping)
+    // Play deploy animation (non-looping), wait for it to finish
     await new Promise<void>((resolve) =>
       this.anim.playExtras("deploy", { loops: 1, onDone: resolve })
     );
 
-    if ((state.mode as Mode) !== "flying") return; // aborted
+    if ((state.mode as Mode) !== "flying") return; // aborted during deploy
 
-    // Play fly animation (looping) for COPTER_FLY_MS
+    // Start the looping fly animation
     this.anim.playExtras("fly");
-    await sleep(COPTER_FLY_MS);
 
-    if ((state.mode as Mode) !== "flying") return; // aborted
+    // Get physics params
+    const [wa, size] = await Promise.all([
+      getCurrentWorkArea(),
+      getWindowSize(),
+    ]);
+    if (!wa) {
+      logDecision("deployFlight() aborted: no work area");
+      return this._startFall();
+    }
 
-    // Retract
-    logDecision("deployFlight() retracting");
+    const floorY = wa.y + wa.height;
+    const winH = size.height;
+    const winW = size.width;
+    const scale = wa.scaleFactor;
+    state.floorY = floorY;
+    state.winH = winH;
+    state.scaleFactor = scale;
+
+    const MAX_FLIGHT_MS = 45000; // 45 seconds max
+
+    // Start Rust flight loop — it spring-eases toward flight_target
+    await beginFlight(floorY, winH, winW, scale, MAX_FLIGHT_MS);
+
+    // Track cursor: every 2–4 seconds pick a new target near last mouse position
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+    const mouseTracker = (e: MouseEvent) => {
+      lastMouseX = e.screenX;
+      lastMouseY = e.screenY;
+    };
+    window.addEventListener("mousemove", mouseTracker);
+
+    // Initial target = current window position (hover in place first)
+    const startPos = await getWindowPosition();
+    await setFlightTarget(startPos.x, startPos.y);
+
+    // Listen for flight ticks to apply tilt/mirror on sprite
+    this._flightTickUnlisten?.();
+    this._flightTickUnlisten = await onFlightTick(({ vel_x }) => {
+      if ((state.mode as Mode) !== "flying") return;
+      // Mirror based on horizontal direction
+      const goingLeft = vel_x < -20;
+      const goingRight = vel_x > 20;
+      if (goingLeft) this.anim.setMirror(true);
+      else if (goingRight) this.anim.setMirror(false);
+      // Tilt via inline style on sprite element (degrees clamped ±15)
+      const tilt = Math.max(-15, Math.min(15, vel_x * 0.03));
+      this.anim.setTilt(tilt);
+    });
+
+    // Target-update loop: redirect copter toward cursor every 2–4 s
+    const flightToken = nextWalkToken();
+    const targetInterval = window.setInterval(async () => {
+      if ((state.mode as Mode) !== "flying" || flightToken !== state.walkToken) {
+        window.clearInterval(targetInterval);
+        return;
+      }
+      // Target = cursor position (physical px), clamped above floor and within screen
+      const cursorPhysX = Math.round(lastMouseX * scale) - Math.round(winW / 2);
+      const cursorPhysY = Math.round(lastMouseY * scale) - Math.round(winH / 2);
+      const clampedX = Math.max(wa.x, Math.min(wa.x + wa.width - winW, cursorPhysX));
+      const clampedY = Math.max(wa.y - winH, Math.min(floorY - winH - 50, cursorPhysY));
+      logDecision(`deployFlight() target=(${ clampedX },${ clampedY }) cursor=(${ lastMouseX },${ lastMouseY })`);
+      await setFlightTarget(clampedX, clampedY);
+    }, 2000 + Math.random() * 2000);
+
+    // Listen for Rust auto-timeout (flight-ended) or early end
+    this._flightEndUnlisten?.();
+    this._flightEndUnlisten = await onFlightEnded(async ({ reason }) => {
+      this._flightEndUnlisten?.(); this._flightEndUnlisten = undefined;
+      if ((state.mode as Mode) !== "flying") return;
+      logDecision(`deployFlight() flight-ended event reason=${reason}`);
+      window.clearInterval(targetInterval);
+      window.removeEventListener("mousemove", mouseTracker);
+      this._flightTickUnlisten?.(); this._flightTickUnlisten = undefined;
+      this.anim.setMirror(false);
+      this.anim.setTilt(0);
+      await this._retractAndFall();
+    });
+
+    // JS-side 45s failsafe (in case Rust event is missed)
+    window.setTimeout(async () => {
+      if ((state.mode as Mode) !== "flying") return;
+      logDecision("deployFlight() JS 45s failsafe: ending flight");
+      window.clearInterval(targetInterval);
+      window.removeEventListener("mousemove", mouseTracker);
+      await endFlight();
+      this._flightTickUnlisten?.(); this._flightTickUnlisten = undefined;
+      this.anim.setMirror(false);
+      this.anim.setTilt(0);
+      await this._retractAndFall();
+    }, MAX_FLIGHT_MS + 500);
+  }
+
+  /** Cancel copter flight early (double-click during flight). */
+  async cancelFlight() {
+    if ((state.mode as Mode) !== "flying") return;
+    logDecision("cancelFlight() early double-click during flight");
+    this._flightEndUnlisten?.(); this._flightEndUnlisten = undefined;
+    this._flightTickUnlisten?.(); this._flightTickUnlisten = undefined;
+    this.anim.setMirror(false);
+    this.anim.setTilt(0);
+    await endFlight();
+    await this._retractAndFall();
+  }
+
+  private _flightTickUnlisten?: () => void;
+  private _flightEndUnlisten?: () => void;
+
+  /** Play retract animation then start fall. */
+  private async _retractAndFall() {
+    if ((state.mode as Mode) !== "flying") return;
+    setMode("hanging"); // reuse hanging → fall path
+    logDecision("_retractAndFall() playing retract clip");
     await new Promise<void>((resolve) =>
       this.anim.playExtras("retract", { loops: 1, onDone: resolve })
     );
-
-    // Now fall normally
     await this._startFall();
   }
 

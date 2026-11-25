@@ -119,6 +119,20 @@ export class Animator {
     return this.onExtras;
   }
 
+  /** Set mirror flag without restarting the current clip (used by flight tilt). */
+  setMirror(mirrored: boolean) {
+    this.el.classList.toggle("mirror", mirrored);
+  }
+
+  /** Apply a CSS rotation tilt (degrees) to the sprite for copter lean. */
+  setTilt(degrees: number) {
+    if (Math.abs(degrees) < 0.5) {
+      this.el.style.rotate = "";
+    } else {
+      this.el.style.rotate = `${degrees.toFixed(1)}deg`;
+    }
+  }
+
   // ── Private helpers ────────────────────────────────────────────────────────
 
   /** Switch background-image and background-size between the two sheets. */
