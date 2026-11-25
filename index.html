@@ -10,7 +10,11 @@
       <div id="bubble"></div>
       <div id="pet">
         <div id="shadow"></div>
-        <div id="sprite"></div>
+        <!-- sprite-wrapper clips to exactly one sprite cell height (208px for main sheet).
+             This prevents row bleed: without it the full 256px box shows the row above. -->
+        <div id="sprite-wrapper">
+          <div id="sprite"></div>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

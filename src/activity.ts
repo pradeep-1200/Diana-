@@ -1,6 +1,6 @@
 // Windows OS activity monitor: idle detection, fullscreen suspension, battery tracking, and breaks
 
-import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast, logDecision, onWindowFocusChanged } from "./platform";
+import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast, logDecision } from "./platform";
 import { state, setDndEnabled, isInQuietHours } from "./state";
 import { BREAK_EVERY_MIN } from "./config";
 import { Animator } from "./sprites";
@@ -22,10 +22,6 @@ export class ActivityMonitor {
   private lastBatteryPercent: number | null = null;
   private lowBatteryNotified = false;
 
-  /** Track last focus state to avoid repeat reactions */
-  private lastFocused: boolean | null = null;
-  private focusUnlisten?: () => void;
-
   constructor(
     private anim: Animator,
     private mood: Mood,
@@ -40,7 +36,10 @@ export class ActivityMonitor {
     }
     this.scheduleIdleCheck();
     this.schedulePowerCheck();
-    this._bindWindowFocus();
+    // Issue 2 fix: onWindowFocusChanged fires when Diana's OWN window gains/loses focus
+    // (e.g. user clicks on Diana), NOT when the user switches to another app.
+    // This made Diana react every time you clicked on her, which is wrong and spammy.
+    // Removed: this._bindWindowFocus();
   }
 
   stop() {
@@ -48,48 +47,7 @@ export class ActivityMonitor {
     window.clearTimeout(this.powerTimer);
     this.idleTimer = undefined;
     this.powerTimer = undefined;
-    this.focusUnlisten?.();
-    this.focusUnlisten = undefined;
-  }
-
-  // ── Window focus / app-switch reactive behavior ──────────────────────────
-
-  private _bindWindowFocus() {
-    this.focusUnlisten?.();
-    this.focusUnlisten = onWindowFocusChanged(async (focused) => {
-      if (this.lastFocused === focused) return;
-      this.lastFocused = focused;
-      if (!state.visible || state.dndEnabled || isInQuietHours()) return;
-      if (state.mode === "sleeping" || state.mode === "hanging" || state.mode === "falling") return;
-
-      if (!focused) {
-        // User switched to another app
-        logDecision("WindowFocus: lost focus → appBlur reaction");
-        const reply = await this.brain.respond({
-          trigger: "appBlur",
-          moodLabel: this.mood.label(),
-          energy: this.mood.s.energy,
-          hour: new Date().getHours(),
-        });
-        say(reply.text, reply.emote, reply.durationMs);
-        this.behaviors.act("waiting", 1);
-      } else {
-        // User came back to Diana
-        logDecision("WindowFocus: gained focus → appFocus reaction");
-        const now = Date.now();
-        // Only react if it's been more than 10 seconds since last interaction
-        if (now - state.lastInteraction > 10000) {
-          const reply = await this.brain.respond({
-            trigger: "appFocus",
-            moodLabel: this.mood.label(),
-            energy: this.mood.s.energy,
-            hour: new Date().getHours(),
-          });
-          say(reply.text, reply.emote, reply.durationMs);
-          this.behaviors.act("cozy", 1);
-        }
-      }
-    });
+    // focusUnlisten removed (Issue 2 fix)
   }
 
   // --- Manual Do Not Disturb toggle ---

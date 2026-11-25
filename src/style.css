@@ -53,7 +53,7 @@ html, body {
   position: relative;
   flex: none;
   width: calc(192px * var(--scale));
-  height: calc(256px * var(--scale));
+  height: calc(208px * var(--scale));
   cursor: grab;
   transform-origin: bottom center;
 }
@@ -64,6 +64,19 @@ html, body {
 }
 #pet.sleeping, #pet.paused-motion {
   animation-play-state: paused;
+}
+
+/* Issue 1 fix: wrapper clips to exactly one main-sheet row height (208 px).
+   Without overflow:hidden the 256 px sprite box shows the row above/below. */
+#sprite-wrapper {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  margin-left: calc(-96px * var(--scale));
+  width: calc(192px * var(--scale));
+  height: calc(208px * var(--scale));
+  overflow: hidden;
+  transform-origin: bottom center;
 }
 
 @keyframes breathingSway {
@@ -89,22 +102,22 @@ html, body {
   pointer-events: none;
 }
 
+/* The sprite element sits inside #sprite-wrapper which provides clipping and scaling.
+   No margin-left or transform:scale needed here — wrapper handles it.
+   background-position is set by the Animator via JS. */
 #sprite {
   position: absolute;
   bottom: 0;
-  left: 50%;
-  margin-left: -96px;
-  /* Fixed at 192×256 for both sheets. Main-sheet frames are bottom-aligned;
-     background-position Y is offset +48px by the Animator to push them down. */
+  left: 0;
   width: 192px;
-  height: 256px;
+  height: 1872px; /* full main sheet height: 9 rows × 208px */
   background: url("/spritesheet.png") 0 0 no-repeat;
   background-size: 1536px 1872px;
   transform-origin: bottom center;
-  transform: scale(var(--scale));
   pointer-events: none;
 }
-#sprite.mirror { transform: scale(calc(var(--scale) * -1), var(--scale)); }
+/* mirror: flip horizontally around bottom-center */
+#sprite.mirror { transform: scaleX(-1); }
 
 .emote {
   position: absolute;

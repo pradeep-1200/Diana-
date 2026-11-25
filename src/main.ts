@@ -4,13 +4,13 @@ import { ScriptedBrain } from "./brain";
 import { Behaviors, sleep, hour, isLateNight } from "./behaviors";
 import { InputHandler } from "./input";
 import { state, setVisible, setWanderEnabled, setBreakEnabled, setQuietHours } from "./state";
-import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin, BASE_WINDOW_W, BASE_WINDOW_H, setChattiness, ChattinessLevel } from "./config";
+import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin, setChattiness, ChattinessLevel } from "./config";
 import { spriteEl, say, syncHitRects, askInlineInput } from "./ui";
 import {
   getCurrentWorkArea,
   getWindowSize,
+  getWindowPosition,
   setWindowPosition,
-  setWindowLogicalSize,
   loadLocalPosition,
   onTrayAction,
   onPetVisible,
@@ -35,6 +35,7 @@ import {
   updateTrayTooltip,
   logDecision,
 } from "./platform";
+import { listen } from "@tauri-apps/api/event";
 
 import { ActivityMonitor } from "./activity";
 
@@ -56,6 +57,15 @@ onTrayAction((action) => {
   if (action === "dnd") activityMonitor.toggleDnd();
 });
 
+// Requirement B: "Bring Diana back" rescue from Rust tray item
+listen("bring-back", () => {
+  logDecision("bring-back event: resetting to idle from Rust rescue");
+  setVisible(true);
+  anim.resume();
+  behaviors.toIdle();
+  activityMonitor.start();
+}).catch(console.warn);
+
 onPetVisible((visible) => {
   setVisible(visible);
   logDecision(`onPetVisible: visible=${visible} (reason: user/tray visibility toggle)`);
@@ -72,17 +82,11 @@ onPetVisible((visible) => {
   }
 });
 
-// Window resize based on sprite scale
-function resizeWindowForScale(scale: number) {
-  const w = Math.round(BASE_WINDOW_W * scale);
-  const h = Math.round(BASE_WINDOW_H * scale);
-  setWindowLogicalSize(w, h).catch((err) => console.warn("Failed to resize window:", err));
-}
-
 // Live settings event listeners
 onSettingScale((scale) => {
   applyScale(scale);
-  resizeWindowForScale(scale);
+  // Do NOT resize the OS window here — the Tauri window is fixed at 240×328 (tauri.conf.json).
+  // Resizing on scale-change breaks Rust's floor/clamp math which uses physical pixel atomics.
   syncHitRects();
 });
 
@@ -140,6 +144,39 @@ onMemoryReset(async () => {
 });
 
 let minuteClockTimer: number | undefined;
+let watchdogTimer: number | undefined;
+
+/** Issue 0 Req H: 2-second watchdog — if window drifts off-screen, snap back to floor. */
+function startWatchdog() {
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = window.setInterval(async () => {
+    if (!state.visible || state.dndEnabled || state.mode === "carried" || state.mode === "falling") return;
+    try {
+      const [pos, size, wa] = await Promise.all([
+        getWindowPosition(),
+        getWindowSize(),
+        getCurrentWorkArea(),
+      ]);
+      if (!wa) return;
+      const cx = pos.x + size.width / 2;
+      const cy = pos.y + size.height / 2;
+      const onScreen =
+        cx >= wa.x - size.width &&
+        cx <= wa.x + wa.width + size.width &&
+        cy >= wa.y - size.height &&
+        cy <= wa.y + wa.height + size.height;
+      if (!onScreen) {
+        const snapX = wa.x + wa.width - size.width - Math.round(40 * wa.scaleFactor);
+        const snapY = wa.y + wa.height - size.height;
+        logDecision(
+          `watchdog: window off-screen at (${pos.x},${pos.y}) size=(${size.width},${size.height}) — snapping to (${snapX},${snapY})`
+        );
+        await setWindowPosition(snapX, snapY);
+        behaviors.toIdle();
+      }
+    } catch { /* ignore */ }
+  }, 2000);
+}
 
 function startMinuteClock() {
   if (minuteClockTimer) clearInterval(minuteClockTimer);
@@ -214,6 +251,7 @@ async function start() {
   await placeInitially();
   anim.play("idle");
   startMinuteClock();
+  startWatchdog();
   activityMonitor.start();
 
   // 1. Initialize SQLite mood & load settings
@@ -226,7 +264,7 @@ async function start() {
     const s = parseFloat(settings["scale"]);
     if (!isNaN(s) && s > 0) {
       applyScale(s);
-      resizeWindowForScale(s);
+      // Do NOT call resizeWindowForScale — window is fixed at 240×328 (tauri.conf.json)
     }
   }
   if (settings["wander_enabled"] !== undefined) {

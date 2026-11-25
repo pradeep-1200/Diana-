@@ -114,6 +114,8 @@ fn toggle_visibility(app: &AppHandle) {
         if now_visible {
             let _ = w.hide();
         } else {
+            // Requirement A: before showing, validate position is on-screen.
+            snap_to_floor_if_offscreen(app);
             let _ = w.show();
         }
         if let Some(hittest) = app.try_state::<HitTester>() {
@@ -121,6 +123,79 @@ fn toggle_visibility(app: &AppHandle) {
         }
         let _ = app.emit("pet-visible", !now_visible);
     }
+}
+
+/// Snap Diana to the primary monitor floor if she is off-screen.
+/// Called before show() so she always reappears in a valid position.
+fn snap_to_floor_if_offscreen(app: &AppHandle) {
+    use tauri::Manager;
+    let Some(w) = app.get_webview_window("main") else { return };
+    let (pos, size, monitors) = match (w.outer_position(), w.outer_size(), w.available_monitors()) {
+        (Ok(p), Ok(s), Ok(m)) => (p, s, m),
+        _ => return,
+    };
+
+    // Check if window centre is inside any monitor's work area
+    let cx = pos.x + size.width as i32 / 2;
+    let cy = pos.y + size.height as i32 / 2;
+    let on_screen = monitors.iter().any(|m| {
+        let wa = m.work_area();
+        cx >= wa.position.x
+            && cx <= wa.position.x + wa.size.width as i32
+            && cy >= wa.position.y
+            && cy <= wa.position.y + wa.size.height as i32
+    });
+
+    if !on_screen {
+        // Snap to primary monitor floor
+        if let Some(primary) = monitors.iter()
+            .find(|m| m.position().x == 0 && m.position().y == 0)
+            .or_else(|| monitors.first())
+        {
+            let wa = primary.work_area();
+            let floor_x = wa.position.x + wa.size.width as i32 / 2 - size.width as i32 / 2;
+            let floor_y = wa.position.y + wa.size.height as i32 - size.height as i32;
+            eprintln!(
+                "[diana] snap_to_floor_if_offscreen: was ({},{}) off-screen -> snapping to ({},{})",
+                pos.x, pos.y, floor_x, floor_y
+            );
+            let _ = w.set_position(tauri::PhysicalPosition::new(floor_x, floor_y));
+        }
+    }
+}
+
+/// Requirement B: "Bring Diana back" — unconditional rescue.
+fn bring_diana_back(app: &AppHandle) {
+    eprintln!("[diana] bring_diana_back: invoked");
+    if let Some(hittest) = app.try_state::<HitTester>() {
+        hittest.abort_physics();
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        // Reset to default size (240x328 physical px)
+        let _ = w.set_size(tauri::PhysicalSize::new(240_u32, 328_u32));
+
+        // Snap to primary monitor floor
+        if let Ok(monitors) = w.available_monitors() {
+            let primary = monitors.iter()
+                .find(|m| m.position().x == 0 && m.position().y == 0)
+                .or_else(|| monitors.first());
+            if let Some(mon) = primary {
+                let wa = mon.work_area();
+                let floor_x = wa.position.x + wa.size.width as i32 / 2 - 120;
+                let floor_y = wa.position.y + wa.size.height as i32 - 328;
+                eprintln!("[diana] bring_diana_back: placing at ({},{})", floor_x, floor_y);
+                let _ = w.set_position(tauri::PhysicalPosition::new(floor_x, floor_y));
+            }
+        }
+        let _ = w.show();
+        let _ = w.set_ignore_cursor_events(false);
+    }
+    if let Some(hittest) = app.try_state::<HitTester>() {
+        hittest.set_visible(true);
+    }
+    // Tell JS to reset to idle mode
+    let _ = app.emit("bring-back", ());
+    let _ = app.emit("pet-visible", true);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -176,12 +251,13 @@ pub fn run() {
             let ht = app.state::<HitTester>();
             ht.start_thread(app.handle().clone());
             let toggle = MenuItem::with_id(app, "toggle", "Show / Hide Diana", true, None::<&str>)?;
+            let rescue = MenuItem::with_id(app, "rescue", "Bring Diana back 🔄", true, None::<&str>)?;
             let dnd = MenuItem::with_id(app, "dnd", "Do Not Disturb", true, None::<&str>)?;
             let dance = MenuItem::with_id(app, "dance", "Dance", true, None::<&str>)?;
             let sleep = MenuItem::with_id(app, "sleep", "Nap / Wake", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle, &dnd, &dance, &sleep, &settings, &quit])?;
+            let menu = Menu::with_items(app, &[&toggle, &rescue, &dnd, &dance, &sleep, &settings, &quit])?;
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -191,6 +267,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "toggle" => toggle_visibility(app),
+                    "rescue" => bring_diana_back(app),
                     "settings" => {
                         let _ = open_settings_window(app.clone());
                     }

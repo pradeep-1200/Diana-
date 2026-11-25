@@ -7,9 +7,13 @@ export const DEFAULT_CONFIG = {
   breakEveryMin: 50, // work-break reminder interval
 } as const;
 
-/** Base window logical dimensions at scale 1.0 */
-export const BASE_WINDOW_W = 300; // 240 / 0.8
-export const BASE_WINDOW_H = 410; // 328 / 0.8
+/** Base window logical dimensions at scale 1.0
+ * These match tauri.conf.json (width=240, height=328).
+ * Do NOT change without also updating tauri.conf.json and the Rust atomics.
+ * The previous session changed these to 300/410 — reverted back (Issue 5 fix).
+ */
+export const BASE_WINDOW_W = 240;
+export const BASE_WINDOW_H = 328;
 
 export let SCALE: number = DEFAULT_CONFIG.scale;
 export let WALK_SPEED: number = DEFAULT_CONFIG.walkSpeed;

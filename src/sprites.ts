@@ -136,14 +136,14 @@ export class Animator {
     }
   }
 
-  /** Draw current frame from main sheet. Y offset includes 48 px headroom push. */
+  /** Draw current frame from main sheet.
+   * Issue 1 fix: the sprite element now lives inside #sprite-wrapper which clips to 208px.
+   * No headroom offset needed — bgY = -(row * 208) positions correctly within the 1872px sheet.
+   * The old +48px headroom was a workaround for the unclipped 256px box; now removed. */
   private _draw() {
     const f = this.clip.frames[this.idx];
-    const headroom = SPRITE_BOX_H - MAIN_FRAME_H; // 48 px
-    // We shift the background UP by (headroom) so the main-sheet row lands at
-    // the BOTTOM of the 256 px sprite box.
     const bgX = -(f * MAIN_FRAME_W);
-    const bgY = -(this.clip.row * MAIN_FRAME_H) + headroom;
+    const bgY = -(this.clip.row * MAIN_FRAME_H);
     this.el.style.backgroundPosition = `${bgX}px ${bgY}px`;
   }
 

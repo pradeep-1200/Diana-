@@ -23,6 +23,7 @@ import {
   beginDrag,
   endDrag,
   onDragEnded,
+  logDecision,
 } from "./platform";
 
 import { ActivityMonitor } from "./activity";
@@ -190,6 +191,9 @@ export class InputHandler {
     window.addEventListener("pointermove", async (e) => {
       if (!this.down || this.dragging) return;
       if (Math.hypot(e.screenX - this.down.x, e.screenY - this.down.y) > 5) {
+        // Guard: do not start drag while in busy/pout/act mode
+        if (state.mode === "busy" || state.mode === "dancing") return;
+
         this.dragging = true;
         setDragging(true);
         this.down = null;
@@ -201,10 +205,23 @@ export class InputHandler {
           getWindowSize(),
           getCurrentWorkArea(),
         ]);
+        const scale = wa ? wa.scaleFactor : (state.scaleFactor || 1);
         const floor = wa ? wa.y + wa.height : state.floorY;
-        const offX = e.screenX - pos.x; // physical px
-        const offY = e.screenY - pos.y;
+
+        // CRITICAL FIX (Issue 0): e.screenX/Y are LOGICAL CSS pixels in the WebView.
+        // getWindowPosition() returns PHYSICAL pixels from win.outerPosition().
+        // At 125% DPI (scale=1.25), raw e.screenX - pos.x is 25% too small,
+        // causing the window to teleport far off-screen on drag start.
+        // Fix: convert cursor to physical px by multiplying by scaleFactor.
+        const cursorPhysX = Math.round(e.screenX * scale);
+        const cursorPhysY = Math.round(e.screenY * scale);
+        const offX = cursorPhysX - pos.x;
+        const offY = cursorPhysY - pos.y;
         const winH = size.height;
+
+        logDecision(
+          `beginDrag: scale=${scale} cursorLogical=(${e.screenX},${e.screenY}) cursorPhys=(${cursorPhysX},${cursorPhysY}) winPos=(${pos.x},${pos.y}) off=(${offX},${offY}) winH=${winH} floor=${floor}`
+        );
 
         setDragState(true); // legacy compat
         await beginDrag(offX, offY, floor, winH);

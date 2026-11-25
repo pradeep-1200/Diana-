@@ -1,4 +1,4 @@
-// Diana physics thread: hit-testing, drag (floor-clamped), and gravity fall.
+﻿// Diana physics thread: hit-testing, drag (floor-clamped), and gravity fall.
 // The thread sleeps most of the time and only runs at ~60 Hz during drag/fall.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-// ── Public data types ─────────────────────────────────────────────────────────
+// â”€â”€ Public data types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
 pub struct HitRect {
@@ -30,7 +30,7 @@ pub struct LandedPayload {
     pub window_y: i32,
 }
 
-// ── Physics mode (shared via Mutex) ──────────────────────────────────────────
+// â”€â”€ Physics mode (shared via Mutex) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(Debug)]
 enum PhysMode {
@@ -50,7 +50,7 @@ enum PhysMode {
     },
 }
 
-// ── HitTester public API ──────────────────────────────────────────────────────
+// â”€â”€ HitTester public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub struct HitTester {
     hit_rects: Arc<Mutex<Vec<HitRect>>>,
@@ -65,6 +65,9 @@ pub struct HitTester {
     is_dragging: Arc<AtomicBool>,
     // Set when falling: suppress normal hit-rect filtering (always hittable)
     is_falling: Arc<AtomicBool>,
+    // Last known-valid window position (physical px), updated each drag tick
+    last_valid_x: Arc<AtomicI32>,
+    last_valid_y: Arc<AtomicI32>,
 }
 
 const PHYS_IDLE: u8 = 0;
@@ -87,6 +90,8 @@ impl HitTester {
             floor_y: Arc::new(AtomicI32::new(i32::MAX)),
             is_dragging: Arc::new(AtomicBool::new(false)),
             is_falling: Arc::new(AtomicBool::new(false)),
+            last_valid_x: Arc::new(AtomicI32::new(0)),
+            last_valid_y: Arc::new(AtomicI32::new(0)),
         }
     }
 
@@ -104,7 +109,7 @@ impl HitTester {
         }
     }
 
-    /// Abort drag/fall silently (hide/DND path — JS will place Diana on floor itself).
+    /// Abort drag/fall silently (hide/DND path â€” JS will place Diana on floor itself).
     pub fn abort_physics(&self) {
         self.phys_flag.store(PHYS_IDLE, Ordering::Release);
         if let Ok(mut lock) = self.phys_mode.lock() {
@@ -121,6 +126,8 @@ impl HitTester {
         let phys_mode = Arc::clone(&self.phys_mode);
         let is_dragging = Arc::clone(&self.is_dragging);
         let is_falling = Arc::clone(&self.is_falling);
+        let last_valid_x = Arc::clone(&self.last_valid_x);
+        let last_valid_y = Arc::clone(&self.last_valid_y);
 
         thread::Builder::new()
             .name("diana-physics".into())
@@ -139,7 +146,7 @@ impl HitTester {
                     let mut last_emit_ticker: u32 = 0;
 
                     loop {
-                        // ── Visibility gate ──────────────────────────────────
+                        // â”€â”€ Visibility gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         if !is_visible.load(Ordering::Relaxed) {
                             thread::sleep(Duration::from_millis(500));
                             last_ignored = None;
@@ -153,7 +160,7 @@ impl HitTester {
 
                         let flag = phys_flag.load(Ordering::Acquire);
 
-                        // ── DRAG mode ─────────────────────────────────────────
+                        // â”€â”€ DRAG mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         if flag == PHYS_DRAG {
                             is_dragging.store(true, Ordering::Relaxed);
                             let _ = window.set_ignore_cursor_events(false);
@@ -185,7 +192,7 @@ impl HitTester {
                                 unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16) & 0x8000 != 0 };
 
                             if timed_out || !btn_down {
-                                // End drag — read current window position
+                                // End drag â€” read current window position
                                 let (wx, wy) = window
                                     .outer_position()
                                     .map(|p| (p.x, p.y))
@@ -218,18 +225,53 @@ impl HitTester {
                                 let max_y = floor_y - win_h;
                                 let new_y = raw_y.min(max_y);
 
-                                if let Ok(hwnd) = window.hwnd() {
-                                    unsafe {
-                                        let _ = SetWindowPos(
-                                            HWND(hwnd.0),
-                                            None,
-                                            new_x,
-                                            new_y,
-                                            0,
-                                            0,
-                                            SWP_NOACTIVATE | SWP_NOZORDER,
-                                        );
+                                // â”€â”€ Requirement C: sanity check drag position â”€â”€
+                                // Reject wildly out-of-bounds positions (e.g. off all monitors).
+                                // A simple guard: x must be within [-8000, 32000], y within [-2000, 32000].
+                                // This catches the logicalâ†’physical pixel mismatch causing x=-15000 etc.
+                                let sane = new_x > -8000 && new_x < 32000
+                                    && new_y > -2000 && new_y < 32000;
+
+                                if sane {
+                                    last_valid_x.store(new_x, Ordering::Relaxed);
+                                    last_valid_y.store(new_y, Ordering::Relaxed);
+
+                                    if let Ok(hwnd) = window.hwnd() {
+                                        unsafe {
+                                            let _ = SetWindowPos(
+                                                HWND(hwnd.0),
+                                                None,
+                                                new_x,
+                                                new_y,
+                                                0,
+                                                0,
+                                                SWP_NOACTIVATE | SWP_NOZORDER,
+                                            );
+                                        }
                                     }
+                                } else {
+                                    // Reject: position is insane â€” keep last valid pos
+                                    let lx = last_valid_x.load(Ordering::Relaxed);
+                                    let ly = last_valid_y.load(Ordering::Relaxed);
+                                    eprintln!(
+                                        "[diana-physics] WARN: rejected drag pos ({},{}) â€” keeping last valid ({},{}). cursor=({},{}) offset=({},{})",
+                                        new_x, new_y, lx, ly, cursor.x, cursor.y, offset_x, offset_y
+                                    );
+                                    // End drag cleanly to prevent repeated badness
+                                    let above_floor = ly + win_h < floor_y;
+                                    phys_flag.store(PHYS_IDLE, Ordering::Release);
+                                    if let Ok(mut lock) = phys_mode.lock() {
+                                        *lock = PhysMode::Idle;
+                                    }
+                                    is_dragging.store(false, Ordering::Relaxed);
+                                    let _ = app.emit(
+                                        "drag-ended",
+                                        DragEndedPayload {
+                                            window_x: lx,
+                                            window_y: ly,
+                                            above_floor,
+                                        },
+                                    );
                                 }
                             }
 
@@ -237,7 +279,7 @@ impl HitTester {
                             continue;
                         }
 
-                        // ── FALL mode ─────────────────────────────────────────
+                        // â”€â”€ FALL mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         if flag == PHYS_FALL {
                             is_dragging.store(false, Ordering::Relaxed);
                             is_falling.store(true, Ordering::Relaxed);
@@ -255,7 +297,7 @@ impl HitTester {
                                         win_h,
                                         scale,
                                     } => {
-                                        // Gravity: 2000 logical px/s² × scale = physical px/s²
+                                        // Gravity: 2000 logical px/sÂ² Ã— scale = physical px/sÂ²
                                         let g = 2000.0 * *scale;
                                         // Terminal velocity: 1400 logical px/s
                                         let term = 1400.0 * *scale;
@@ -334,7 +376,7 @@ impl HitTester {
                             continue;
                         }
 
-                        // ── IDLE: normal hit-test ─────────────────────────────
+                        // â”€â”€ IDLE: normal hit-test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                         is_dragging.store(false, Ordering::Relaxed);
                         is_falling.store(false, Ordering::Relaxed);
 
@@ -401,14 +443,14 @@ impl HitTester {
     }
 }
 
-// ── Tauri commands ────────────────────────────────────────────────────────────
+// â”€â”€ Tauri commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[tauri::command]
 pub fn update_hit_rects(state: tauri::State<HitTester>, rects: Vec<HitRect>) {
     state.set_rects(rects);
 }
 
-/// Legacy no-op — kept so existing JS `set_drag_state` call compiles without
+/// Legacy no-op â€” kept so existing JS `set_drag_state` call compiles without
 /// changes until input.ts is updated in this commit.
 #[tauri::command]
 pub fn set_drag_state(_state: tauri::State<HitTester>, _dragging: bool) {}
@@ -425,6 +467,14 @@ pub fn begin_drag(
     floor_y: i32,
     win_h: i32,
 ) {
+    // Guard: reject clearly insane offsets (would cause teleport)
+    if offset_x < -4000 || offset_x > 8000 || offset_y < -2000 || offset_y > 8000 {
+        eprintln!(
+            "[diana-physics] WARN: begin_drag rejected insane offset ({},{}) floor={} winH={}",
+            offset_x, offset_y, floor_y, win_h
+        );
+        return;
+    }
     let mut lock = state.phys_mode.lock().unwrap();
     *lock = PhysMode::Drag {
         offset_x,
