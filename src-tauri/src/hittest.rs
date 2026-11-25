@@ -59,6 +59,27 @@ enum PhysMode {
     },
 }
 
+/// Pure helper: returns true if (x, y) is within the union of all monitor work areas
+/// plus a small edge margin (250 px) so edge-dragging stays smooth while far-off-screen
+/// coordinates (e.g. -20000, +20000) are rejected.
+pub fn is_within_monitors_union(x: i32, y: i32, monitors: &[tauri::Monitor], margin: i32) -> bool {
+    if monitors.is_empty() {
+        return x > -4000 && x < 16000 && y > -2000 && y < 16000;
+    }
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    for m in monitors {
+        let wa = m.work_area();
+        min_x = min_x.min(wa.position.x);
+        min_y = min_y.min(wa.position.y);
+        max_x = max_x.max(wa.position.x + wa.size.width as i32);
+        max_y = max_y.max(wa.position.y + wa.size.height as i32);
+    }
+    x >= min_x - margin && x <= max_x + margin && y >= min_y - margin && y <= max_y + margin
+}
+
 // ── HitTester public API ──────────────────────────────────────────────────────
 
 pub struct HitTester {
@@ -125,6 +146,10 @@ impl HitTester {
         }
         self.is_dragging.store(false, Ordering::Relaxed);
         self.is_falling.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_phys_idle(&self) -> bool {
+        self.phys_flag.load(Ordering::Acquire) == PHYS_IDLE
     }
 
     pub fn start_thread(&self, app: AppHandle) {
@@ -216,9 +241,9 @@ impl HitTester {
                                 let max_y = floor_y - win_h;
                                 let new_y = raw_y.min(max_y);
 
-                                // Sanity check: reject wildly out-of-bounds positions
-                                let sane = new_x > -8000 && new_x < 32000
-                                    && new_y > -2000 && new_y < 32000;
+                                // Sanity check (Req C): reject positions outside union of all monitor work areas (+250px margin)
+                                let monitors = window.available_monitors().unwrap_or_default();
+                                let sane = is_within_monitors_union(new_x, new_y, &monitors, 250);
 
                                 if sane {
                                     last_valid_x.store(new_x, Ordering::Relaxed);
@@ -235,9 +260,10 @@ impl HitTester {
                                     let lx = last_valid_x.load(Ordering::Relaxed);
                                     let ly = last_valid_y.load(Ordering::Relaxed);
                                     eprintln!(
-                                        "[diana-physics] WARN: rejected drag pos ({},{}) — keeping ({},{}). cursor=({},{}) offset=({},{})",
+                                        "[diana-physics] WARN: rejected drag pos ({},{}) outside monitor union — keeping ({},{}). cursor=({},{}) offset=({},{})",
                                         new_x, new_y, lx, ly, cursor.x, cursor.y, offset_x, offset_y
                                     );
+                                    // Keep last valid position (don't teleport), end drag cleanly
                                     let above_floor = ly + win_h < floor_y;
                                     phys_flag.store(PHYS_IDLE, Ordering::Release);
                                     if let Ok(mut lock) = phys_mode.lock() { *lock = PhysMode::Idle; }
@@ -470,6 +496,7 @@ pub fn set_drag_state(_state: tauri::State<HitTester>, _dragging: bool) {}
 
 #[tauri::command]
 pub fn begin_drag(
+    app: AppHandle,
     state: tauri::State<HitTester>,
     offset_x: i32,
     offset_y: i32,
@@ -482,6 +509,12 @@ pub fn begin_drag(
             offset_x, offset_y, floor_y, win_h
         );
         return;
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        if let Ok(pos) = w.outer_position() {
+            state.last_valid_x.store(pos.x, Ordering::Relaxed);
+            state.last_valid_y.store(pos.y, Ordering::Relaxed);
+        }
     }
     let mut lock = state.phys_mode.lock().unwrap();
     *lock = PhysMode::Drag {

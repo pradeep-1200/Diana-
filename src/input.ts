@@ -6,7 +6,7 @@ import { Animator } from "./sprites";
 import { Mood } from "./mood";
 import { Behaviors } from "./behaviors";
 import { Brain, EMOTION_CLIPS } from "./brain";
-import { state, setMode, setWanderEnabled, setVisible, recordInteraction, setDragging } from "./state";
+import { state, setMode, setWanderEnabled, setVisible, recordInteraction, setDragging, nextWalkToken } from "./state";
 import { petEl, bubbleEl, fx, say, bar, syncHitRects } from "./ui";
 import {
   getWindowPosition,
@@ -148,6 +148,7 @@ export class InputHandler {
 
   private async beginCarry() {
     recordInteraction();
+    nextWalkToken();
     setMode("carried");
     this.mood.carried();
     dbLogEvent("carry");
@@ -201,8 +202,7 @@ export class InputHandler {
     window.addEventListener("pointermove", async (e) => {
       if (!this.down || this.dragging) return;
       if (Math.hypot(e.screenX - this.down.x, e.screenY - this.down.y) > 5) {
-        // Guard: do not start drag while in busy/pout/act mode
-        if (state.mode === "busy" || state.mode === "dancing") return;
+        if (!state.visible || state.dndEnabled) return;
 
         this.dragging = true;
         setDragging(true);
