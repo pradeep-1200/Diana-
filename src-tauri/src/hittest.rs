@@ -317,7 +317,7 @@ impl HitTester {
 
                                     // Emit position to JS at ~10 Hz (every 6th frame)
                                     last_emit_ticker = last_emit_ticker.wrapping_add(1);
-                                    if last_emit_ticker.is_multiple_of(6) {
+                                    if last_emit_ticker % 6 == 0 {
                                         let _ = app.emit(
                                             "physics-pos",
                                             serde_json::json!({

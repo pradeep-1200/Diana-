@@ -1,7 +1,7 @@
 // Windows OS activity monitor: idle detection, fullscreen suspension, battery tracking, and breaks
 
-import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast, logDecision } from "./platform";
-import { state, setDndEnabled } from "./state";
+import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast, logDecision, onWindowFocusChanged } from "./platform";
+import { state, setDndEnabled, isInQuietHours } from "./state";
 import { BREAK_EVERY_MIN } from "./config";
 import { Animator } from "./sprites";
 import { Mood } from "./mood";
@@ -22,6 +22,10 @@ export class ActivityMonitor {
   private lastBatteryPercent: number | null = null;
   private lowBatteryNotified = false;
 
+  /** Track last focus state to avoid repeat reactions */
+  private lastFocused: boolean | null = null;
+  private focusUnlisten?: () => void;
+
   constructor(
     private anim: Animator,
     private mood: Mood,
@@ -36,6 +40,7 @@ export class ActivityMonitor {
     }
     this.scheduleIdleCheck();
     this.schedulePowerCheck();
+    this._bindWindowFocus();
   }
 
   stop() {
@@ -43,6 +48,48 @@ export class ActivityMonitor {
     window.clearTimeout(this.powerTimer);
     this.idleTimer = undefined;
     this.powerTimer = undefined;
+    this.focusUnlisten?.();
+    this.focusUnlisten = undefined;
+  }
+
+  // ── Window focus / app-switch reactive behavior ──────────────────────────
+
+  private _bindWindowFocus() {
+    this.focusUnlisten?.();
+    this.focusUnlisten = onWindowFocusChanged(async (focused) => {
+      if (this.lastFocused === focused) return;
+      this.lastFocused = focused;
+      if (!state.visible || state.dndEnabled || isInQuietHours()) return;
+      if (state.mode === "sleeping" || state.mode === "hanging" || state.mode === "falling") return;
+
+      if (!focused) {
+        // User switched to another app
+        logDecision("WindowFocus: lost focus → appBlur reaction");
+        const reply = await this.brain.respond({
+          trigger: "appBlur",
+          moodLabel: this.mood.label(),
+          energy: this.mood.s.energy,
+          hour: new Date().getHours(),
+        });
+        say(reply.text, reply.emote, reply.durationMs);
+        this.behaviors.act("waiting", 1);
+      } else {
+        // User came back to Diana
+        logDecision("WindowFocus: gained focus → appFocus reaction");
+        const now = Date.now();
+        // Only react if it's been more than 10 seconds since last interaction
+        if (now - state.lastInteraction > 10000) {
+          const reply = await this.brain.respond({
+            trigger: "appFocus",
+            moodLabel: this.mood.label(),
+            energy: this.mood.s.energy,
+            hour: new Date().getHours(),
+          });
+          say(reply.text, reply.emote, reply.durationMs);
+          this.behaviors.act("cozy", 1);
+        }
+      }
+    });
   }
 
   // --- Manual Do Not Disturb toggle ---
@@ -50,7 +97,7 @@ export class ActivityMonitor {
     const next = !state.dndEnabled;
     setDndEnabled(next);
     if (next) {
-      logDecision("toggleDnd: ON (reason: user DND) -> hiding window, pausing anim, canceling timers");
+      logDecision("toggleDnd: ON (reason: user DND) → hiding window, pausing anim, canceling timers");
       this.behaviors.emergencyToFloor().then(() => {
         this.anim.pause();
         this.stop();
@@ -58,7 +105,7 @@ export class ActivityMonitor {
         hideWindow();
       });
     } else {
-      logDecision("toggleDnd: OFF (reason: user DND) -> restoring window, resuming anim, re-arming timers");
+      logDecision("toggleDnd: OFF (reason: user DND) → restoring window, resuming anim, re-arming timers");
       showWindow();
       this.anim.resume();
       this.start();
@@ -85,6 +132,15 @@ export class ActivityMonitor {
   private async checkIdle() {
     if (!state.visible || state.dndEnabled || this.hiddenDueToFullscreen) return;
 
+    // ── Quiet Hours gate ─────────────────────────────────────────────────────
+    if (isInQuietHours()) {
+      if (state.mode === "idle") {
+        logDecision("checkIdle: quiet hours active → enforcing sleep");
+        this.behaviors.startNap();
+      }
+      return; // No other activity processing during quiet hours
+    }
+
     const idleMs = await getUserIdleMs();
 
     // Timer thresholds (shrunk if DIANA_DEBUG_FAST=1)
@@ -96,35 +152,33 @@ export class ActivityMonitor {
     const returnThresholdMs = this.debugFast ? 5000 : 15000;
     const stepSec = this.debugFast ? 2 : 10;
 
-    // 1. Break reminder tracking (Amendment 5)
-    if (idleMs < activeThresholdMs) {
-      // User is active: increment active seconds
-      this.activeSeconds += stepSec;
-      if (this.activeSeconds >= breakTargetSec) {
+    // 1. Break reminder tracking — only when enabled (Bug 4 fix)
+    if (state.breakEnabled) {
+      if (idleMs < activeThresholdMs) {
+        this.activeSeconds += stepSec;
+        if (this.activeSeconds >= breakTargetSec) {
+          this.activeSeconds = 0;
+          const reply = await this.brain.respond({
+            trigger: "breakTime",
+            moodLabel: this.mood.label(),
+            energy: this.mood.s.energy,
+            hour: new Date().getHours(),
+          });
+          say(reply.text, reply.emote, 6000);
+          this.behaviors.act("waiting", 4);
+        }
+      } else if (idleMs >= breakResetMs) {
         this.activeSeconds = 0;
-        const reply = await this.brain.respond({
-          trigger: "breakTime",
-          moodLabel: this.mood.label(),
-          energy: this.mood.s.energy,
-          hour: new Date().getHours(),
-        });
-        say(reply.text, reply.emote, 6000);
-        this.behaviors.act("waiting", 4);
       }
-    } else if (idleMs >= breakResetMs) {
-      // Idle for >= breakResetMs (5m or 20s) counts as a real break -> reset completely!
-      this.activeSeconds = 0;
     }
 
-    // 2. Absence & "Welcome back" (Amendment 7)
+    // 2. Absence & "Welcome back"
     if (idleMs >= awayThresholdMs) {
       this.wasAway = true;
-      // If away for >= idleSleepMs (15m or 30s) and Diana is idle, take a nap
       if (idleMs >= idleSleepMs && state.mode === "idle") {
         this.behaviors.startNap();
       }
     } else if (this.wasAway && idleMs < returnThresholdMs) {
-      // User returned after being idle
       this.wasAway = false;
       if (state.mode === "sleeping") {
         this.behaviors.wakeUp();
@@ -145,7 +199,6 @@ export class ActivityMonitor {
   private schedulePowerCheck() {
     window.clearTimeout(this.powerTimer);
     this.powerTimer = undefined;
-    // If user hid window or DND is on, zero polling
     if (!state.visible || state.dndEnabled) {
       return;
     }
@@ -160,11 +213,11 @@ export class ActivityMonitor {
 
     const data = await getFullscreenAndPower();
 
-    // 1. Fullscreen handling (Amendment 3)
+    // 1. Fullscreen handling
     if (data.is_fullscreen) {
       if (!this.hiddenDueToFullscreen) {
         logDecision(
-          `ActivityMonitor: hideWindow due to fullscreen (reason: fullscreen, raw SHQueryUserNotificationState=${data.notification_state})`
+          `ActivityMonitor: hideWindow due to fullscreen (notification_state=${data.notification_state})`
         );
         this.hiddenDueToFullscreen = true;
         this.behaviors.emergencyToFloor().then(() => {
@@ -175,11 +228,10 @@ export class ActivityMonitor {
           hideWindow();
         });
       }
-      return; // Do not process battery or idle timers while fullscreen
+      return;
     } else if (this.hiddenDueToFullscreen) {
-      // Exited fullscreen -> restore window
       logDecision(
-        `ActivityMonitor: showWindow exiting fullscreen (reason: fullscreen exited, raw SHQueryUserNotificationState=${data.notification_state})`
+        `ActivityMonitor: showWindow exiting fullscreen (notification_state=${data.notification_state})`
       );
       this.hiddenDueToFullscreen = false;
       await showWindow();

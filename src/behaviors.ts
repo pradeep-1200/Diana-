@@ -3,9 +3,10 @@
 import { Animator, ClipName } from "./sprites";
 import { Mood, MoodState, MoodLabel } from "./mood";
 import { Brain, EMOTION_CLIPS } from "./brain";
-import { state, setMode, nextWalkToken, recordInteraction, Mode } from "./state";
-import { SCALE, WALK_SPEED } from "./config";
+import { state, setMode, nextWalkToken, recordInteraction, Mode, isInQuietHours } from "./state";
+import { SCALE, WALK_SPEED, CHATTINESS, CHATTINESS_WEIGHT } from "./config";
 import { fx, emote, say, setMotionSleeping, setMotionPaused } from "./ui";
+import { getSeason, getHoliday, pick } from "./lines";
 import {
   getCurrentWorkArea,
   getAllMonitors,
@@ -27,6 +28,8 @@ export const isLateNight = () => hour() < 5;
 
 /** ms the hang clip plays before gravity starts (gives user time to double-click for copter). */
 const HANG_GRACE_MS = 1500;
+/** How long Diana flies before auto-retracting (ms). */
+const COPTER_FLY_MS = 6000;
 
 let decideTimer: number | undefined;
 
@@ -241,6 +244,7 @@ export class Behaviors {
     this.anim.playExtras("hang");
 
     // Arm fall after grace window (1.5 s by default)
+    // Bug 4 fix: only Behaviors owns this timer; InputHandler calls cancelHang()
     this._hangGraceTimer = window.setTimeout(() => this._startFall(), HANG_GRACE_MS);
   };
 
@@ -249,6 +253,41 @@ export class Behaviors {
   }
 
   private _hangGraceTimer: number | undefined;
+
+  /**
+   * Called by InputHandler on double-click during hang.
+   * Deploys the copter instead of falling.
+   */
+  async deployFlight() {
+    if (state.mode !== "hanging") return;
+    window.clearTimeout(this._hangGraceTimer);
+    this._hangGraceTimer = undefined;
+    setMode("flying");
+    logDecision("deployFlight() launching copter");
+
+    say("Whirr~ 🚁", "🚁", 2000);
+    // Play deploy animation (non-looping)
+    await new Promise<void>((resolve) =>
+      this.anim.playExtras("deploy", { loops: 1, onDone: resolve })
+    );
+
+    if ((state.mode as Mode) !== "flying") return; // aborted
+
+    // Play fly animation (looping) for COPTER_FLY_MS
+    this.anim.playExtras("fly");
+    await sleep(COPTER_FLY_MS);
+
+    if ((state.mode as Mode) !== "flying") return; // aborted
+
+    // Retract
+    logDecision("deployFlight() retracting");
+    await new Promise<void>((resolve) =>
+      this.anim.playExtras("retract", { loops: 1, onDone: resolve })
+    );
+
+    // Now fall normally
+    await this._startFall();
+  }
 
   private async _startFall() {
     if (state.mode !== "hanging") return;
@@ -501,6 +540,14 @@ export class Behaviors {
     this.scheduleDecide("decide");
 
     // 3. Sleeping state management
+    if (isInQuietHours()) {
+      if (state.mode !== "sleeping") {
+        logDecision("decide() quiet hours active -> enforcing sleep");
+        return this.goToSleep();
+      }
+      return;
+    }
+
     if (state.mode === "sleeping") {
       logDecision(`decide() mode=sleeping, energy=${m.energy.toFixed(1)}, idleFor=${(idleFor/1000).toFixed(0)}s`);
       // Natural wake threshold rebalanced to 70
@@ -697,7 +744,7 @@ export class Behaviors {
       {
         id: "ponder",
         name: "ponder",
-        weight: () => 12,
+        weight: () => Math.round(CHATTINESS_WEIGHT[CHATTINESS] * 0.6),
         run: () => this.ponder(),
       },
       {
@@ -804,8 +851,30 @@ export class Behaviors {
       {
         id: "thought",
         name: "thought",
-        weight: () => 20,
+        weight: () => CHATTINESS_WEIGHT[CHATTINESS],
         run: () => this.thought(),
+      },
+      {
+        id: "sprint",
+        name: "sprint",
+        weight: (m) => (m.energy > 40 ? 12 : 3),
+        run: () => {
+          say("Dash! 💨", "💨", 1600);
+          this.act("run", 2);
+        },
+      },
+      {
+        id: "seasonal_thought",
+        name: "seasonal_thought",
+        weight: () => 10,
+        run: async () => {
+          const holiday = getHoliday();
+          const season = getSeason();
+          const key = holiday ?? season;
+          const line = pick(key);
+          say(line.t, line.e, 3500);
+          this.act("cozy", 2);
+        },
       },
       {
         id: "wander",

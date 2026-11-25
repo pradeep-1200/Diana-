@@ -22,6 +22,7 @@ export const CLIPS = {
   idle:      { row: 0, frames: [0, 1, 2, 3, 4, 5], ms: [1500, 1100, 1600, 140, 1200, 1500] },
   walkRight: { row: 1, frames: [0, 1, 2, 3, 4, 5, 6, 7], ms: 110 },
   walkLeft:  { row: 2, frames: [0, 1, 2, 3, 4, 5, 6, 7], ms: 110 },
+  run:       { row: 3, frames: [0, 1, 2, 3, 4, 5, 6, 7], ms: 70 },  // faster sprint (row 3)
   dance:     { row: 4, frames: [0, 1, 2, 3, 4, 5, 6, 7], ms: 150 },
   cozy:      { row: 5, frames: [0, 5, 6, 5], ms: 450 },
   surprised: { row: 5, frames: [1], ms: 900 },

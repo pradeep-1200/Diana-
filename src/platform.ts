@@ -7,6 +7,7 @@ import {
   availableMonitors,
   PhysicalPosition,
   PhysicalSize,
+  LogicalSize,
   Monitor,
 } from "@tauri-apps/api/window";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -66,18 +67,17 @@ export async function setWindowSize(width: number, height: number): Promise<void
   await win.setSize(new PhysicalSize(Math.round(width), Math.round(height)));
 }
 
+/** Resize the window using logical (CSS) pixels — simpler for scale changes. */
+export async function setWindowLogicalSize(width: number, height: number): Promise<void> {
+  await win.setSize(new LogicalSize(Math.round(width), Math.round(height)));
+}
+
 export async function getScaleFactor(): Promise<number> {
   return await win.scaleFactor();
 }
 
 // ── Rust-side physics commands ────────────────────────────────────────────────
 
-/** Tell Rust to start the drag loop.
- *  @param offsetX  cursor X minus window left (physical px)
- *  @param offsetY  cursor Y minus window top  (physical px)
- *  @param floorY   work-area bottom            (physical px)
- *  @param winH     window height               (physical px)
- */
 export async function beginDrag(
   offsetX: number,
   offsetY: number,
@@ -92,18 +92,10 @@ export async function beginDrag(
   });
 }
 
-/** Tell Rust to end an active drag early (JS pointerup path). */
 export async function endDrag(): Promise<void> {
   await invoke("end_drag");
 }
 
-/**
- * Tell Rust to start free-fall from the current position.
- * @param velYInitial  initial downward velocity (physical px/s)
- * @param floorY       work-area bottom (physical px)
- * @param winH         window height (physical px)
- * @param scale        DPI scale factor
- */
 export async function beginFall(
   velYInitial: number,
   floorY: number,
@@ -118,7 +110,6 @@ export async function beginFall(
   });
 }
 
-/** Abort any active physics immediately (hide/DND path). */
 export async function abortPhysics(): Promise<void> {
   await invoke("abort_physics");
 }
@@ -184,6 +175,15 @@ export function onWindowMoved(cb: () => void): () => void {
   return () => {
     unlisten?.();
   };
+}
+
+/** Listen for window focus changes (Diana window gaining/losing focus). */
+export function onWindowFocusChanged(cb: (focused: boolean) => void): () => void {
+  let unlisten: UnlistenFn | undefined;
+  win.onFocusChanged(({ payload: focused }) => cb(focused)).then((fn) => {
+    unlisten = fn;
+  });
+  return () => { unlisten?.(); };
 }
 
 export function saveLocalPosition(x: number, y: number) {
@@ -341,7 +341,8 @@ export async function dbSetFact(key: string, value: string, source: string): Pro
 
 export async function dbLogEvent(eventType: string, meta?: string): Promise<void> {
   try {
-    await invoke("db_log_event", { eventType, meta: meta ?? null });
+    // Use snake_case explicitly for Tauri v2 (Bug 5 fix)
+    await invoke("db_log_event", { event_type: eventType, meta: meta ?? null });
   } catch (err) {
     console.warn("db_log_event failed:", err);
   }
@@ -354,7 +355,7 @@ export async function dbRecordActivity(
   pets: number
 ): Promise<void> {
   try {
-    await invoke("db_record_activity", { date, hour, activeMins, pets });
+    await invoke("db_record_activity", { date, hour, active_mins: activeMins, pets });
   } catch (err) {
     console.warn("db_record_activity failed:", err);
   }
@@ -384,6 +385,24 @@ export async function dbImportLocalStorage(mood?: MoodRecord | null, pos?: strin
   }
 }
 
+export async function dbExportAll(): Promise<string> {
+  try {
+    return await invoke<string>("db_export_all");
+  } catch (err) {
+    console.warn("db_export_all failed:", err);
+    return "{}";
+  }
+}
+
+export async function dbImportAll(json: string): Promise<void> {
+  try {
+    await invoke("db_import_all", { json });
+  } catch (err) {
+    console.warn("db_import_all failed:", err);
+    throw err;
+  }
+}
+
 export async function openSettingsWindow(): Promise<void> {
   try {
     await invoke("open_settings_window");
@@ -400,12 +419,46 @@ export async function onSettingWander(handler: (enabled: boolean) => void): Prom
   return await listen<boolean>("setting-wander", (e) => handler(e.payload));
 }
 
+export async function onSettingWanderAll(handler: (enabled: boolean) => void): Promise<UnlistenFn> {
+  return await listen<boolean>("setting-wander-all", (e) => handler(e.payload));
+}
+
+export async function updateTrayTooltip(tooltip: string): Promise<void> {
+  try {
+    await invoke("update_tray_tooltip", { tooltip });
+  } catch (err) {
+    console.warn("update_tray_tooltip failed:", err);
+  }
+}
+
 export async function onSettingWalkSpeed(handler: (speed: number) => void): Promise<UnlistenFn> {
   return await listen<number>("setting-walk-speed", (e) => handler(e.payload));
 }
 
 export async function onSettingUsername(handler: (name: string) => void): Promise<UnlistenFn> {
   return await listen<string>("setting-username", (e) => handler(e.payload));
+}
+
+export async function onSettingChattiness(handler: (level: string) => void): Promise<UnlistenFn> {
+  return await listen<string>("setting-chattiness", (e) => handler(e.payload));
+}
+
+export async function onSettingBreakEnabled(handler: (enabled: boolean) => void): Promise<UnlistenFn> {
+  return await listen<boolean>("setting-break-enabled", (e) => handler(e.payload));
+}
+
+export async function onSettingBreakInterval(handler: (mins: number) => void): Promise<UnlistenFn> {
+  return await listen<number>("setting-break-interval", (e) => handler(e.payload));
+}
+
+export interface QuietHoursPayload {
+  enabled: boolean;
+  start: string;  // "HH:MM"
+  end: string;    // "HH:MM"
+}
+
+export async function onSettingQuietHours(handler: (p: QuietHoursPayload) => void): Promise<UnlistenFn> {
+  return await listen<QuietHoursPayload>("setting-quiet-hours", (e) => handler(e.payload));
 }
 
 export async function onMemoryReset(handler: () => void): Promise<UnlistenFn> {
@@ -425,6 +478,3 @@ export function logDecision(entry: string): void {
   console.log(`[DECIDE ${ts}] ${entry}`);
   invoke("log_decision", { entry: `${ts} ${entry}` }).catch(() => {});
 }
-
-
-

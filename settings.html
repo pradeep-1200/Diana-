@@ -88,6 +88,16 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+        <div class="form-row toggle-row">
+          <div class="row-info">
+            <label for="toggle-wander-all" class="form-label">Wander Across All Monitors</label>
+            <span class="form-hint">Allow Diana to stroll between multiple connected screens</span>
+          </div>
+          <label class="fluent-toggle">
+            <input type="checkbox" id="toggle-wander-all" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
         <div class="form-row">
           <div class="row-info">
             <label for="slider-walk-speed" class="form-label">Walk Speed</label>
@@ -205,6 +215,18 @@
             <span class="stat-value" id="stat-time">0h</span>
             <span class="stat-label">Active Time</span>
           </div>
+        </div>
+        <div class="backup-actions" style="margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(0,0,0,0.06);">
+          <div class="row-info" style="margin-bottom: 8px;">
+            <span class="form-label">Backup & Restore</span>
+            <span class="form-hint">Export or import Diana's memories, facts, and settings</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button id="btn-export-backup" class="fluent-btn">Export Backup</button>
+            <button id="btn-import-backup" class="fluent-btn">Import Backup</button>
+            <input type="file" id="file-import-backup" accept=".json" style="display:none;" />
+          </div>
+          <div id="backup-status" class="status-msg" style="margin-top: 4px;"></div>
         </div>
         <div class="danger-zone">
           <div class="row-info">

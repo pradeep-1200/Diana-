@@ -59,16 +59,20 @@ export class InputHandler {
     state.clicks.push(now);
     while (state.clicks.length && now - state.clicks[0] > 5000) state.clicks.shift();
 
-    // While hanging: double-click arms copter (handled in hangGrace double-click path).
-    // Single click during hang: just react.
+    // While hanging: double-click arms copter!
     if (state.mode === "hanging" || state.mode === "falling") {
-      // Abort grace timer — user is interacting
+      this.behaviors.cancelHang();
       window.clearTimeout(this.hangGraceTimer);
-      // Double-click during hang/fall → future copter deploy (Commit B).
-      // For now, single-click just says something.
-      if (state.mode === "hanging") {
-        say("Whoa! I'm up here!", "😮", 1800);
+
+      if (now - state.lastClick < 450 && state.mode === "hanging") {
+        state.lastClick = 0;
+        return this.behaviors.deployFlight();
       }
+
+      if (state.mode === "hanging") {
+        say("Whoa! I'm floating! Double-click for copter~", "😮", 1800);
+      }
+      state.lastClick = now;
       recordInteraction(now);
       return;
     }

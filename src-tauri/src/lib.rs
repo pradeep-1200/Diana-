@@ -63,7 +63,7 @@ fn is_debug_fast() -> bool {
 }
 
 #[tauri::command]
-fn log_decision(entry: String) {
+fn log_decision(app: AppHandle, entry: String) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -71,15 +71,41 @@ fn log_decision(entry: String) {
     let line = format!("[{}] {}\n", now, entry);
     print!("{}", line);
     let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    // Resolve path in app_data_dir with fallback to CWD
+    let log_path = match app.path().app_data_dir() {
+        Ok(dir) => {
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join("decisions.log")
+        }
+        Err(_) => std::path::PathBuf::from("decisions.log"),
+    };
+
+    // Size cap: Rotate when > 1 MB (1_048_576 bytes)
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() > 1_048_576 {
+            let old_path = log_path.with_extension("log.old");
+            let _ = std::fs::rename(&log_path, &old_path);
+        }
+    }
+
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("decisions.log")
+        .open(&log_path)
     {
         use std::io::Write;
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
     }
+}
+
+#[tauri::command]
+fn update_tray_tooltip(app: AppHandle, tooltip: String) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some(&tooltip));
+    }
+    Ok(())
 }
 
 fn toggle_visibility(app: &AppHandle) {
@@ -135,10 +161,16 @@ pub fn run() {
             db_get_stats_summary,
             db_reset_memory,
             db_import_local_storage,
+            db_export_all,
+            db_import_all,
+            update_tray_tooltip,
         ])
         .setup(|app| {
             let db_state = db::DbState::new(app.handle())
                 .map_err(Box::<dyn std::error::Error>::from)?;
+            let initial_streak = db_state.get_streak();
+            let tray_tooltip = format!("Diana — Day {}", initial_streak);
+
             app.manage(db_state);
 
             let ht = app.state::<HitTester>();
@@ -151,9 +183,9 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&toggle, &dnd, &dance, &sleep, &settings, &quit])?;
 
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Diana")
+                .tooltip(&tray_tooltip)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {

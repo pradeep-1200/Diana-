@@ -3,13 +3,14 @@ import { Mood } from "./mood";
 import { ScriptedBrain } from "./brain";
 import { Behaviors, sleep, hour, isLateNight } from "./behaviors";
 import { InputHandler } from "./input";
-import { state, setVisible, setWanderEnabled } from "./state";
-import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin } from "./config";
+import { state, setVisible, setWanderEnabled, setBreakEnabled, setQuietHours } from "./state";
+import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin, BASE_WINDOW_W, BASE_WINDOW_H, setChattiness, ChattinessLevel } from "./config";
 import { spriteEl, say, syncHitRects, askInlineInput } from "./ui";
 import {
   getCurrentWorkArea,
   getWindowSize,
   setWindowPosition,
+  setWindowLogicalSize,
   loadLocalPosition,
   onTrayAction,
   onPetVisible,
@@ -22,10 +23,16 @@ import {
   dbGetAllSettings,
   onSettingScale,
   onSettingWander,
+  onSettingWanderAll,
   onSettingWalkSpeed,
   onSettingUsername,
+  onSettingChattiness,
+  onSettingBreakEnabled,
+  onSettingBreakInterval,
+  onSettingQuietHours,
   onMemoryReset,
   getUserIdleMs,
+  updateTrayTooltip,
   logDecision,
 } from "./platform";
 
@@ -65,9 +72,17 @@ onPetVisible((visible) => {
   }
 });
 
+// Window resize based on sprite scale
+function resizeWindowForScale(scale: number) {
+  const w = Math.round(BASE_WINDOW_W * scale);
+  const h = Math.round(BASE_WINDOW_H * scale);
+  setWindowLogicalSize(w, h).catch((err) => console.warn("Failed to resize window:", err));
+}
+
 // Live settings event listeners
 onSettingScale((scale) => {
   applyScale(scale);
+  resizeWindowForScale(scale);
   syncHitRects();
 });
 
@@ -78,12 +93,40 @@ onSettingWander((enabled) => {
   }
 });
 
+onSettingWanderAll((enabled) => {
+  state.wanderAllMonitors = enabled;
+});
+
 onSettingWalkSpeed((speed) => {
   setWalkSpeed(speed);
 });
 
 onSettingUsername((name) => {
   brain.setUserName(name);
+});
+
+onSettingChattiness((level) => {
+  setChattiness(level as ChattinessLevel);
+});
+
+onSettingBreakEnabled((enabled) => {
+  setBreakEnabled(enabled);
+});
+
+onSettingBreakInterval((mins) => {
+  setBreakEveryMin(mins);
+});
+
+onSettingQuietHours((data) => {
+  const [sh, sm] = (data.start || "23:00").split(":").map(Number);
+  const [eh, em] = (data.end || "07:00").split(":").map(Number);
+  setQuietHours({
+    enabled: data.enabled,
+    startH: sh || 0,
+    startM: sm || 0,
+    endH: eh || 0,
+    endM: em || 0,
+  });
 });
 
 onMemoryReset(async () => {
@@ -181,18 +224,41 @@ async function start() {
   logDecision(`main.ts settings loaded: ${JSON.stringify(settings)}`);
   if (settings["scale"]) {
     const s = parseFloat(settings["scale"]);
-    if (!isNaN(s) && s > 0) applyScale(s);
+    if (!isNaN(s) && s > 0) {
+      applyScale(s);
+      resizeWindowForScale(s);
+    }
   }
   if (settings["wander_enabled"] !== undefined) {
     setWanderEnabled(settings["wander_enabled"] !== "false");
+  }
+  if (settings["wander_all_monitors"] !== undefined) {
+    state.wanderAllMonitors = settings["wander_all_monitors"] === "true";
   }
   if (settings["walk_speed"]) {
     const spd = parseInt(settings["walk_speed"], 10);
     if (!isNaN(spd) && spd > 0) setWalkSpeed(spd);
   }
+  if (settings["chattiness"]) {
+    setChattiness(settings["chattiness"] as ChattinessLevel);
+  }
+  if (settings["break_reminder_enabled"] !== undefined) {
+    setBreakEnabled(settings["break_reminder_enabled"] !== "false");
+  }
   if (settings["break_interval_mins"]) {
     const bim = parseInt(settings["break_interval_mins"], 10);
     if (!isNaN(bim) && bim > 0) setBreakEveryMin(bim);
+  }
+  if (settings["quiet_hours_enabled"] !== undefined) {
+    const [sh, sm] = (settings["quiet_hours_start"] || "23:00").split(":").map(Number);
+    const [eh, em] = (settings["quiet_hours_end"] || "07:00").split(":").map(Number);
+    setQuietHours({
+      enabled: settings["quiet_hours_enabled"] === "true",
+      startH: sh || 0,
+      startM: sm || 0,
+      endH: eh || 0,
+      endM: em || 0,
+    });
   }
   syncHitRects();
 
@@ -240,6 +306,7 @@ async function start() {
   // 3. Stats Summary: streaks & active hour pattern
   const stats = await dbGetStatsSummary();
   logDecision(`main.ts stats: streaks=${stats.streak_days}, pets=${stats.total_pets}, hours=${JSON.stringify(stats.top_active_hours)}`);
+  updateTrayTooltip(`Diana — Day ${Math.max(1, stats.streak_days)}`);
   const h = hour();
   const away = mood.awayMinutes;
   const greetingTrigger =
