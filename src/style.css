@@ -52,6 +52,7 @@ html, body {
 #pet {
   position: relative;
   flex: none;
+  /* Match wrapper visual footprint: native 192×208 scaled by --scale */
   width: calc(192px * var(--scale));
   height: calc(208px * var(--scale));
   cursor: grab;
@@ -66,17 +67,26 @@ html, body {
   animation-play-state: paused;
 }
 
-/* Issue 1 fix: wrapper clips to exactly one main-sheet row height (208 px).
-   Without overflow:hidden the 256 px sprite box shows the row above/below. */
+/* Issue 1 fix: wrapper is native 192×208px, scaled via transform so the sprite
+   inside is also native pixels. This avoids the cropping bug where calc()-based
+   sizing clips the unscaled sprite instead of scaling it.
+   transform-origin: bottom center keeps her feet on the floor line. */
 #sprite-wrapper {
   position: absolute;
   bottom: 0;
   left: 50%;
-  margin-left: calc(-96px * var(--scale));
-  width: calc(192px * var(--scale));
-  height: calc(208px * var(--scale));
-  overflow: hidden;
+  margin-left: -96px;        /* half of native 192px */
+  width: 192px;              /* native pixels — transform handles display size */
+  height: 208px;             /* one main-sheet row, native */
+  overflow: hidden;          /* clips any inter-row bleed */
+  transform: scale(var(--scale));
   transform-origin: bottom center;
+  pointer-events: none;
+}
+/* When playing extras sheet (hang/fly/deploy), frames are 256px tall.
+   Expand clip height so the copter head (top 48px) is not cut off. */
+#sprite-wrapper.extras-mode {
+  height: 256px;
 }
 
 @keyframes breathingSway {

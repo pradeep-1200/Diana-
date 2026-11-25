@@ -172,18 +172,23 @@ fn bring_diana_back(app: &AppHandle) {
     }
     if let Some(w) = app.get_webview_window("main") {
         // Reset to default size (240x328 physical px)
-        let _ = w.set_size(tauri::PhysicalSize::new(240_u32, 328_u32));
+        // Use LogicalSize so the window restores to 240×328 CSS pixels
+        // regardless of the DPI scale factor.
+        let _ = w.set_size(tauri::LogicalSize::new(240.0_f64, 328.0_f64));
 
-        // Snap to primary monitor floor
+        // Snap to primary monitor floor using current window physical size
         if let Ok(monitors) = w.available_monitors() {
             let primary = monitors.iter()
                 .find(|m| m.position().x == 0 && m.position().y == 0)
                 .or_else(|| monitors.first());
             if let Some(mon) = primary {
                 let wa = mon.work_area();
-                let floor_x = wa.position.x + wa.size.width as i32 / 2 - 120;
-                let floor_y = wa.position.y + wa.size.height as i32 - 328;
-                eprintln!("[diana] bring_diana_back: placing at ({},{})", floor_x, floor_y);
+                // Get physical size (after set_size above applied LogicalSize)
+                let phys_w = w.outer_size().map(|s| s.width as i32).unwrap_or(300);
+                let phys_h = w.outer_size().map(|s| s.height as i32).unwrap_or(410);
+                let floor_x = wa.position.x + wa.size.width as i32 / 2 - phys_w / 2;
+                let floor_y = wa.position.y + wa.size.height as i32 - phys_h;
+                eprintln!("[diana] bring_diana_back: placing at ({},{}) phys_size={}x{}", floor_x, floor_y, phys_w, phys_h);
                 let _ = w.set_position(tauri::PhysicalPosition::new(floor_x, floor_y));
             }
         }

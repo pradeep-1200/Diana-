@@ -67,11 +67,13 @@ export class Animator {
   private done?: () => void;
   private paused = false;
   private onExtras = false;
+  private wrapper: HTMLElement | null;
 
   name: ClipName = "idle";
 
   constructor(private el: HTMLElement) {
     // Sprite element starts on the main sheet
+    this.wrapper = el.parentElement as HTMLElement | null;
     this._applySheet(false);
   }
 
@@ -138,6 +140,11 @@ export class Animator {
   /** Switch background-image and background-size between the two sheets. */
   private _applySheet(extras: boolean) {
     this.onExtras = extras;
+    // Toggle extras-mode on wrapper to expand clip height from 208px → 256px
+    // so the copter head (top 48px of extras frames) is not clipped.
+    if (this.wrapper) {
+      this.wrapper.classList.toggle("extras-mode", extras);
+    }
     if (extras) {
       this.el.style.backgroundImage = "url('/extras.png')";
       // 8 cols × 256 px tall = 1536×1536
