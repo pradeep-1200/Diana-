@@ -1,7 +1,7 @@
 // Windows OS activity monitor: idle detection, fullscreen suspension, battery tracking, and breaks
 
 import { getUserIdleMs, getFullscreenAndPower, hideWindow, showWindow, isDebugFast, logDecision } from "./platform";
-import { state, setDndEnabled, isInQuietHours } from "./state";
+import { state, setDndEnabled } from "./state";
 import { BREAK_EVERY_MIN } from "./config";
 import { Animator } from "./sprites";
 import { Mood } from "./mood";
@@ -36,10 +36,6 @@ export class ActivityMonitor {
     }
     this.scheduleIdleCheck();
     this.schedulePowerCheck();
-    // Issue 2 fix: onWindowFocusChanged fires when Diana's OWN window gains/loses focus
-    // (e.g. user clicks on Diana), NOT when the user switches to another app.
-    // This made Diana react every time you clicked on her, which is wrong and spammy.
-    // Removed: this._bindWindowFocus();
   }
 
   stop() {
@@ -47,7 +43,6 @@ export class ActivityMonitor {
     window.clearTimeout(this.powerTimer);
     this.idleTimer = undefined;
     this.powerTimer = undefined;
-    // focusUnlisten removed (Issue 2 fix)
   }
 
   // --- Manual Do Not Disturb toggle ---
@@ -55,15 +50,13 @@ export class ActivityMonitor {
     const next = !state.dndEnabled;
     setDndEnabled(next);
     if (next) {
-      logDecision("toggleDnd: ON (reason: user DND) → hiding window, pausing anim, canceling timers");
-      this.behaviors.emergencyToFloor().then(() => {
-        this.anim.pause();
-        this.stop();
-        this.behaviors.stopDecide();
-        hideWindow();
-      });
+      logDecision("toggleDnd: ON (reason: user DND) -> hiding window, pausing anim, canceling timers");
+      this.anim.pause();
+      this.stop();
+      this.behaviors.stopDecide();
+      hideWindow();
     } else {
-      logDecision("toggleDnd: OFF (reason: user DND) → restoring window, resuming anim, re-arming timers");
+      logDecision("toggleDnd: OFF (reason: user DND) -> restoring window, resuming anim, re-arming timers");
       showWindow();
       this.anim.resume();
       this.start();
@@ -90,15 +83,6 @@ export class ActivityMonitor {
   private async checkIdle() {
     if (!state.visible || state.dndEnabled || this.hiddenDueToFullscreen) return;
 
-    // ── Quiet Hours gate ─────────────────────────────────────────────────────
-    if (isInQuietHours()) {
-      if (state.mode === "idle") {
-        logDecision("checkIdle: quiet hours active → enforcing sleep");
-        this.behaviors.startNap();
-      }
-      return; // No other activity processing during quiet hours
-    }
-
     const idleMs = await getUserIdleMs();
 
     // Timer thresholds (shrunk if DIANA_DEBUG_FAST=1)
@@ -110,33 +94,35 @@ export class ActivityMonitor {
     const returnThresholdMs = this.debugFast ? 5000 : 15000;
     const stepSec = this.debugFast ? 2 : 10;
 
-    // 1. Break reminder tracking — only when enabled (Bug 4 fix)
-    if (state.breakEnabled) {
-      if (idleMs < activeThresholdMs) {
-        this.activeSeconds += stepSec;
-        if (this.activeSeconds >= breakTargetSec) {
-          this.activeSeconds = 0;
-          const reply = await this.brain.respond({
-            trigger: "breakTime",
-            moodLabel: this.mood.label(),
-            energy: this.mood.s.energy,
-            hour: new Date().getHours(),
-          });
-          say(reply.text, reply.emote, 6000);
-          this.behaviors.act("waiting", 4);
-        }
-      } else if (idleMs >= breakResetMs) {
+    // 1. Break reminder tracking (Amendment 5)
+    if (idleMs < activeThresholdMs) {
+      // User is active: increment active seconds
+      this.activeSeconds += stepSec;
+      if (this.activeSeconds >= breakTargetSec) {
         this.activeSeconds = 0;
+        const reply = await this.brain.respond({
+          trigger: "breakTime",
+          moodLabel: this.mood.label(),
+          energy: this.mood.s.energy,
+          hour: new Date().getHours(),
+        });
+        say(reply.text, reply.emote, 6000);
+        this.behaviors.act("waiting", 4);
       }
+    } else if (idleMs >= breakResetMs) {
+      // Idle for >= breakResetMs (5m or 20s) counts as a real break -> reset completely!
+      this.activeSeconds = 0;
     }
 
-    // 2. Absence & "Welcome back"
+    // 2. Absence & "Welcome back" (Amendment 7)
     if (idleMs >= awayThresholdMs) {
       this.wasAway = true;
+      // If away for >= idleSleepMs (15m or 30s) and Diana is idle, take a nap
       if (idleMs >= idleSleepMs && state.mode === "idle") {
         this.behaviors.startNap();
       }
     } else if (this.wasAway && idleMs < returnThresholdMs) {
+      // User returned after being idle
       this.wasAway = false;
       if (state.mode === "sleeping") {
         this.behaviors.wakeUp();
@@ -157,6 +143,7 @@ export class ActivityMonitor {
   private schedulePowerCheck() {
     window.clearTimeout(this.powerTimer);
     this.powerTimer = undefined;
+    // If user hid window or DND is on, zero polling
     if (!state.visible || state.dndEnabled) {
       return;
     }
@@ -171,25 +158,24 @@ export class ActivityMonitor {
 
     const data = await getFullscreenAndPower();
 
-    // 1. Fullscreen handling
+    // 1. Fullscreen handling (Amendment 3)
     if (data.is_fullscreen) {
       if (!this.hiddenDueToFullscreen) {
         logDecision(
-          `ActivityMonitor: hideWindow due to fullscreen (notification_state=${data.notification_state})`
+          `ActivityMonitor: hideWindow due to fullscreen (reason: fullscreen, raw SHQueryUserNotificationState=${data.notification_state})`
         );
         this.hiddenDueToFullscreen = true;
-        this.behaviors.emergencyToFloor().then(() => {
-          this.anim.pause();
-          this.behaviors.stopDecide();
-          window.clearTimeout(this.idleTimer);
-          this.idleTimer = undefined;
-          hideWindow();
-        });
+        this.anim.pause();
+        this.behaviors.stopDecide();
+        window.clearTimeout(this.idleTimer);
+        this.idleTimer = undefined;
+        await hideWindow();
       }
-      return;
+      return; // Do not process battery or idle timers while fullscreen
     } else if (this.hiddenDueToFullscreen) {
+      // Exited fullscreen -> restore window
       logDecision(
-        `ActivityMonitor: showWindow exiting fullscreen (notification_state=${data.notification_state})`
+        `ActivityMonitor: showWindow exiting fullscreen (reason: fullscreen exited, raw SHQueryUserNotificationState=${data.notification_state})`
       );
       this.hiddenDueToFullscreen = false;
       await showWindow();

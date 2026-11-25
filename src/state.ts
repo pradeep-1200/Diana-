@@ -1,14 +1,6 @@
 // Centralized state container for Diana Pet
 
-export type Mode = "idle" | "walking" | "sleeping" | "dancing" | "carried" | "busy" | "hanging" | "falling" | "flying";
-
-export interface QuietHoursState {
-  enabled: boolean;
-  startH: number; // hour 0-23
-  startM: number; // minute
-  endH: number;
-  endM: number;
-}
+export type Mode = "idle" | "walking" | "sleeping" | "dancing" | "carried" | "busy";
 
 export interface AppState {
   mode: Mode;
@@ -22,20 +14,9 @@ export interface AppState {
   lastLateNight: number;
   lastHover: number;
   lastClick: number;
-  lastSeasonalEmote: number;
   clicks: number[];
   walkToken: number;
   lastModeChange: number;
-  /** Work-area floor in physical pixels — cached after startup and on resize. */
-  floorY: number;
-  /** Physical window height, cached alongside floorY. */
-  winH: number;
-  /** DPI scale factor, cached for Rust physics commands. */
-  scaleFactor: number;
-  /** Break reminders enabled */
-  breakEnabled: boolean;
-  /** Quiet hours configuration */
-  quietHours: QuietHoursState;
 }
 
 export const state: AppState = {
@@ -50,15 +31,9 @@ export const state: AppState = {
   lastLateNight: 0,
   lastHover: 0,
   lastClick: 0,
-  lastSeasonalEmote: 0,
   clicks: [],
   walkToken: 0,
   lastModeChange: Date.now(),
-  floorY: 0,
-  winH: 0,
-  scaleFactor: 1,
-  breakEnabled: true,
-  quietHours: { enabled: false, startH: 23, startM: 0, endH: 7, endM: 0 },
 };
 
 type StateListener = (state: AppState) => void;
@@ -102,28 +77,6 @@ export function setDragging(val: boolean) {
   if (state.isDragging === val) return;
   state.isDragging = val;
   notify();
-}
-
-export function setBreakEnabled(val: boolean) {
-  state.breakEnabled = val;
-  notify();
-}
-
-export function setQuietHours(qh: QuietHoursState) {
-  state.quietHours = qh;
-  notify();
-}
-
-export function isInQuietHours(): boolean {
-  const q = state.quietHours;
-  if (!q.enabled) return false;
-  const now = new Date();
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const start = q.startH * 60 + q.startM;
-  const end   = q.endH   * 60 + q.endM;
-  if (start <= end) return cur >= start && cur < end;
-  // wraps midnight (e.g. 23:00 → 07:00)
-  return cur >= start || cur < end;
 }
 
 export function recordInteraction(ts = Date.now()) {

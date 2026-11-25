@@ -3,10 +3,9 @@
 import { Animator, ClipName } from "./sprites";
 import { Mood, MoodState, MoodLabel } from "./mood";
 import { Brain, EMOTION_CLIPS } from "./brain";
-import { state, setMode, nextWalkToken, recordInteraction, Mode, isInQuietHours } from "./state";
-import { SCALE, WALK_SPEED, CHATTINESS, CHATTINESS_WEIGHT } from "./config";
+import { state, setMode, nextWalkToken, recordInteraction, Mode } from "./state";
+import { SCALE, WALK_SPEED } from "./config";
 import { fx, emote, say, setMotionSleeping, setMotionPaused } from "./ui";
-import { getSeason, getHoliday, pick } from "./lines";
 import {
   getCurrentWorkArea,
   getAllMonitors,
@@ -15,25 +14,12 @@ import {
   setWindowPosition,
   getUserIdleMs,
   logDecision,
-  beginFall,
-  abortPhysics,
-  onPhysicsLanded,
-  LandedPayload,
-  beginFlight,
-  setFlightTarget,
-  endFlight,
-  onFlightTick,
-  onFlightEnded,
 } from "./platform";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const rand = (a: number, b: number) => a + Math.random() * (b - a);
 export const hour = () => new Date().getHours();
 export const isLateNight = () => hour() < 5;
-
-/** ms the hang clip plays before gravity starts (gives user time to double-click for copter). */
-const HANG_GRACE_MS = 1500;
-// COPTER_FLY_MS removed — real flight duration is now 45 s, controlled by Rust (Issue 4 fix)
 
 let decideTimer: number | undefined;
 
@@ -225,247 +211,6 @@ export class Behaviors {
     else this.startNap();
   };
 
-  // ── Hang / Fall / Land ──────────────────────────────────────────────────────
-
-  /**
-   * Called by InputHandler after drag-ended with above_floor=true.
-   * Plays the "hang" clip (extras sheet), starts grace window.
-   * If no double-click within graceMs → start fall.
-   * Double-click path (Commit B) will call deployFlight() instead.
-   */
-  startHang = async (wx: number, wy: number) => {
-    nextWalkToken();
-    setMode("hanging");
-    logDecision(`startHang() wx=${wx} wy=${wy}`);
-
-    const reply = await this.brain.respond({
-      trigger: "pickup",
-      moodLabel: this.mood.label(),
-      energy: this.mood.s.energy,
-      hour: hour(),
-    });
-    say(reply.text, reply.emote || "😮", reply.durationMs);
-    this.anim.playExtras("hang");
-
-    // Arm fall after grace window (1.5 s by default)
-    // Bug 4 fix: only Behaviors owns this timer; InputHandler calls cancelHang()
-    this._hangGraceTimer = window.setTimeout(() => this._startFall(), HANG_GRACE_MS);
-  };
-
-  cancelHang() {
-    window.clearTimeout(this._hangGraceTimer);
-  }
-
-  private _hangGraceTimer: number | undefined;
-
-  /**
-   * Called by InputHandler on double-click during hang.
-   * Issue 4 fix: Real Rust-driven copter flight with spring-ease physics,
-   * target tracking toward cursor, and tilt/mirror on the sprite.
-   * Previous stub just ran `await sleep(COPTER_FLY_MS)` with no movement.
-   */
-  async deployFlight() {
-    if (state.mode !== "hanging") return;
-    window.clearTimeout(this._hangGraceTimer);
-    this._hangGraceTimer = undefined;
-    setMode("flying");
-    logDecision("deployFlight() launching copter (real Rust flight)");
-
-    say("Whirr~ 🚁", "🚁", 2000);
-    // Play deploy animation (non-looping), wait for it to finish
-    await new Promise<void>((resolve) =>
-      this.anim.playExtras("deploy", { loops: 1, onDone: resolve })
-    );
-
-    if ((state.mode as Mode) !== "flying") return; // aborted during deploy
-
-    // Start the looping fly animation
-    this.anim.playExtras("fly");
-
-    // Get physics params
-    const [wa, size] = await Promise.all([
-      getCurrentWorkArea(),
-      getWindowSize(),
-    ]);
-    if (!wa) {
-      logDecision("deployFlight() aborted: no work area");
-      return this._startFall();
-    }
-
-    const floorY = wa.y + wa.height;
-    const winH = size.height;
-    const winW = size.width;
-    const scale = wa.scaleFactor;
-    state.floorY = floorY;
-    state.winH = winH;
-    state.scaleFactor = scale;
-
-    const MAX_FLIGHT_MS = 45000; // 45 seconds max
-
-    // Start Rust flight loop — it spring-eases toward flight_target
-    await beginFlight(floorY, winH, winW, scale, MAX_FLIGHT_MS);
-
-    // Track cursor: every 2–4 seconds pick a new target near last mouse position
-    let lastMouseX = 0;
-    let lastMouseY = 0;
-    const mouseTracker = (e: MouseEvent) => {
-      lastMouseX = e.screenX;
-      lastMouseY = e.screenY;
-    };
-    window.addEventListener("mousemove", mouseTracker);
-
-    // Initial target = current window position (hover in place first)
-    const startPos = await getWindowPosition();
-    await setFlightTarget(startPos.x, startPos.y);
-
-    // Listen for flight ticks to apply tilt/mirror on sprite
-    this._flightTickUnlisten?.();
-    this._flightTickUnlisten = await onFlightTick(({ vel_x }) => {
-      if ((state.mode as Mode) !== "flying") return;
-      // Mirror based on horizontal direction
-      const goingLeft = vel_x < -20;
-      const goingRight = vel_x > 20;
-      if (goingLeft) this.anim.setMirror(true);
-      else if (goingRight) this.anim.setMirror(false);
-      // Tilt via inline style on sprite element (degrees clamped ±15)
-      const tilt = Math.max(-15, Math.min(15, vel_x * 0.03));
-      this.anim.setTilt(tilt);
-    });
-
-    // Target-update loop: redirect copter toward cursor every 2–4 s
-    const flightToken = nextWalkToken();
-    const targetInterval = window.setInterval(async () => {
-      if ((state.mode as Mode) !== "flying" || flightToken !== state.walkToken) {
-        window.clearInterval(targetInterval);
-        return;
-      }
-      // Target = cursor position (physical px), clamped above floor and within screen
-      const cursorPhysX = Math.round(lastMouseX * scale) - Math.round(winW / 2);
-      const cursorPhysY = Math.round(lastMouseY * scale) - Math.round(winH / 2);
-      const clampedX = Math.max(wa.x, Math.min(wa.x + wa.width - winW, cursorPhysX));
-      const clampedY = Math.max(wa.y - winH, Math.min(floorY - winH - 50, cursorPhysY));
-      logDecision(`deployFlight() target=(${ clampedX },${ clampedY }) cursor=(${ lastMouseX },${ lastMouseY })`);
-      await setFlightTarget(clampedX, clampedY);
-    }, 2000 + Math.random() * 2000);
-
-    // Listen for Rust auto-timeout (flight-ended) or early end
-    this._flightEndUnlisten?.();
-    this._flightEndUnlisten = await onFlightEnded(async ({ reason }) => {
-      this._flightEndUnlisten?.(); this._flightEndUnlisten = undefined;
-      if ((state.mode as Mode) !== "flying") return;
-      logDecision(`deployFlight() flight-ended event reason=${reason}`);
-      window.clearInterval(targetInterval);
-      window.removeEventListener("mousemove", mouseTracker);
-      this._flightTickUnlisten?.(); this._flightTickUnlisten = undefined;
-      this.anim.setMirror(false);
-      this.anim.setTilt(0);
-      await this._retractAndFall();
-    });
-
-    // JS-side 45s failsafe (in case Rust event is missed)
-    window.setTimeout(async () => {
-      if ((state.mode as Mode) !== "flying") return;
-      logDecision("deployFlight() JS 45s failsafe: ending flight");
-      window.clearInterval(targetInterval);
-      window.removeEventListener("mousemove", mouseTracker);
-      await endFlight();
-      this._flightTickUnlisten?.(); this._flightTickUnlisten = undefined;
-      this.anim.setMirror(false);
-      this.anim.setTilt(0);
-      await this._retractAndFall();
-    }, MAX_FLIGHT_MS + 500);
-  }
-
-  /** Cancel copter flight early (double-click during flight). */
-  async cancelFlight() {
-    if ((state.mode as Mode) !== "flying") return;
-    logDecision("cancelFlight() early double-click during flight");
-    this._flightEndUnlisten?.(); this._flightEndUnlisten = undefined;
-    this._flightTickUnlisten?.(); this._flightTickUnlisten = undefined;
-    this.anim.setMirror(false);
-    this.anim.setTilt(0);
-    await endFlight();
-    await this._retractAndFall();
-  }
-
-  private _flightTickUnlisten?: () => void;
-  private _flightEndUnlisten?: () => void;
-
-  /** Play retract animation then start fall. */
-  private async _retractAndFall() {
-    if ((state.mode as Mode) !== "flying") return;
-    setMode("hanging"); // reuse hanging → fall path
-    logDecision("_retractAndFall() playing retract clip");
-    await new Promise<void>((resolve) =>
-      this.anim.playExtras("retract", { loops: 1, onDone: resolve })
-    );
-    await this._startFall();
-  }
-
-  private async _startFall() {
-    if (state.mode !== "hanging") return;
-    setMode("falling");
-    logDecision("_startFall() beginning Rust-driven gravity");
-
-    // Show falling animation
-    this.anim.playExtras("fall");
-
-    const [wa, size] = await Promise.all([
-      getCurrentWorkArea(),
-      getWindowSize(),
-    ]);
-    if (!wa) return;
-    const floorY = wa.y + wa.height;
-    const winH = size.height;
-    state.floorY = floorY;
-    state.winH = winH;
-    state.scaleFactor = wa.scaleFactor;
-
-    await beginFall(0, floorY, winH, wa.scaleFactor);
-
-    // Listen for landing (one-shot, using statically-imported onPhysicsLanded)
-    this._landUnlisten?.();
-    this._landUnlisten = await onPhysicsLanded((p) => this.onLanded(p));
-  }
-
-  private _landUnlisten?: () => void;
-
-  /** Called when Rust thread emits physics-landed. */
-  onLanded = async (_p: LandedPayload) => {
-    this._landUnlisten?.();
-    this._landUnlisten = undefined;
-    if (state.mode !== "falling") return;
-    setMode("busy");
-    logDecision("onLanded() playing land clip");
-    say("Ow... hehe. Again?", "🌟", 2000);
-    await new Promise<void>((resolve) =>
-      this.anim.playExtras("land", { loops: 1, onDone: resolve })
-    );
-    this.toIdle();
-  };
-
-  /**
-   * Immediately snap Diana to the floor without animation.
-   * Used when hide/DND/fullscreen fires during hang or fall.
-   */
-  emergencyToFloor = async () => {
-    window.clearTimeout(this._hangGraceTimer);
-    this._landUnlisten?.();
-    this._landUnlisten = undefined;
-    await abortPhysics();
-
-    // Place on floor
-    const [wa, size] = await Promise.all([
-      getCurrentWorkArea(),
-      getWindowSize(),
-    ]);
-    if (wa) {
-      const pos = await getWindowPosition();
-      await setWindowPosition(pos.x, wa.y + wa.height - size.height);
-    }
-    // toIdle() will be called when the window becomes visible again
-  };
-
   wander = async () => {
     if (!state.wanderEnabled) return;
     const token = nextWalkToken();
@@ -653,14 +398,6 @@ export class Behaviors {
     this.scheduleDecide("decide");
 
     // 3. Sleeping state management
-    if (isInQuietHours()) {
-      if (state.mode !== "sleeping") {
-        logDecision("decide() quiet hours active -> enforcing sleep");
-        return this.goToSleep();
-      }
-      return;
-    }
-
     if (state.mode === "sleeping") {
       logDecision(`decide() mode=sleeping, energy=${m.energy.toFixed(1)}, idleFor=${(idleFor/1000).toFixed(0)}s`);
       // Natural wake threshold rebalanced to 70
@@ -681,13 +418,8 @@ export class Behaviors {
       return;
     }
 
-    // 4. Non-idle mode watchdog (skip for physics-owned modes)
+    // 4. Non-idle mode watchdog
     if (state.mode !== "idle") {
-      // hanging/falling are owned by physics thread — do not interrupt
-      if (state.mode === "hanging" || state.mode === "falling") {
-        logDecision(`decide() skipping watchdog: mode=${state.mode} (physics-owned)`);
-        return;
-      }
       const now = Date.now();
       const inCurrentMode = now - (state.lastModeChange || now);
       if (inCurrentMode > 10000 && state.mode !== "carried") {
@@ -857,7 +589,7 @@ export class Behaviors {
       {
         id: "ponder",
         name: "ponder",
-        weight: () => Math.round(CHATTINESS_WEIGHT[CHATTINESS] * 0.6),
+        weight: () => 12,
         run: () => this.ponder(),
       },
       {
@@ -964,30 +696,8 @@ export class Behaviors {
       {
         id: "thought",
         name: "thought",
-        weight: () => CHATTINESS_WEIGHT[CHATTINESS],
+        weight: () => 20,
         run: () => this.thought(),
-      },
-      {
-        id: "sprint",
-        name: "sprint",
-        weight: (m) => (m.energy > 40 ? 12 : 3),
-        run: () => {
-          say("Dash! 💨", "💨", 1600);
-          this.act("run", 2);
-        },
-      },
-      {
-        id: "seasonal_thought",
-        name: "seasonal_thought",
-        weight: () => 10,
-        run: async () => {
-          const holiday = getHoliday();
-          const season = getSeason();
-          const key = holiday ?? season;
-          const line = pick(key);
-          say(line.t, line.e, 3500);
-          this.act("cozy", 2);
-        },
       },
       {
         id: "wander",

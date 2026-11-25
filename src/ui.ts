@@ -2,43 +2,12 @@
 
 import { updateHitRects, HitRect } from "./platform";
 
-// ── Debug overlay (Ctrl+Shift+D) ──────────────────────────────────────────────
-let _debugOverlay: HTMLDivElement | null = null;
-let _debugRects: HitRect[] = [];
-let _debugVisible = false;
-
-function _renderDebugOverlay() {
-  if (!_debugOverlay) return;
-  _debugOverlay.innerHTML = "";
-  if (!_debugVisible) return;
-  for (const r of _debugRects) {
-    const div = document.createElement("div");
-    div.style.cssText = `position:fixed;left:${r.x}px;top:${r.y}px;width:${r.width}px;height:${r.height}px;border:2px solid rgba(255,80,80,0.9);background:rgba(255,80,80,0.15);pointer-events:none;z-index:9999;box-sizing:border-box;`;
-    _debugOverlay.appendChild(div);
-  }
-}
-
-function _initDebugOverlay() {
-  _debugOverlay = document.createElement("div");
-  _debugOverlay.id = "diana-debug-overlay";
-  _debugOverlay.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:9998;";
-  document.body.appendChild(_debugOverlay);
-  document.addEventListener("keydown", (e) => {
-    if (e.ctrlKey && e.shiftKey && e.key === "D") {
-      _debugVisible = !_debugVisible;
-      _renderDebugOverlay();
-      console.log(`[Debug] Hit-rect overlay ${_debugVisible ? "ON" : "OFF"}`);
-    }
-  });
-}
-
 export const petEl = document.getElementById("pet")!;
 export const spriteEl = document.getElementById("sprite")!;
 export const bubbleEl = document.getElementById("bubble")!;
 export const stageEl = document.getElementById("stage")!;
 
 petEl.classList.add("alive");
-_initDebugOverlay();
 
 export function setMotionSleeping(sleeping: boolean) {
   petEl.classList.toggle("sleeping", sleeping);
@@ -162,9 +131,6 @@ export function syncHitRects() {
   }
 
   updateHitRects(rects);
-  // Sync debug overlay
-  _debugRects = rects;
-  _renderDebugOverlay();
 }
 
 export function emote(ch: string) {

@@ -8,8 +8,6 @@ import {
   dbGetAllSettings,
   dbGetStatsSummary,
   dbResetMemory,
-  dbExportAll,
-  dbImportAll,
 } from "./platform";
 
 // DOM Elements
@@ -22,7 +20,6 @@ const labelScale = document.getElementById("label-scale") as HTMLSpanElement;
 const toggleAlwaysOnTop = document.getElementById("toggle-always-on-top") as HTMLInputElement;
 
 const toggleWander = document.getElementById("toggle-wander") as HTMLInputElement;
-const toggleWanderAll = document.getElementById("toggle-wander-all") as HTMLInputElement;
 const sliderWalkSpeed = document.getElementById("slider-walk-speed") as HTMLInputElement;
 const labelWalkSpeed = document.getElementById("label-walk-speed") as HTMLSpanElement;
 const selectChattiness = document.getElementById("select-chattiness") as HTMLSelectElement;
@@ -48,11 +45,6 @@ const modalConfirm = document.getElementById("modal-confirm") as HTMLDivElement;
 const btnModalCancel = document.getElementById("btn-modal-cancel") as HTMLButtonElement;
 const btnModalConfirm = document.getElementById("btn-modal-confirm") as HTMLButtonElement;
 
-const btnExportBackup = document.getElementById("btn-export-backup") as HTMLButtonElement;
-const btnImportBackup = document.getElementById("btn-import-backup") as HTMLButtonElement;
-const fileImportBackup = document.getElementById("file-import-backup") as HTMLInputElement;
-const backupStatus = document.getElementById("backup-status") as HTMLDivElement;
-
 async function loadSettings() {
   try {
     // 1. User Name
@@ -74,7 +66,6 @@ async function loadSettings() {
 
     // Wandering
     toggleWander.checked = settings["wander_enabled"] !== "false";
-    toggleWanderAll.checked = settings["wander_all_monitors"] === "true";
 
     // Walk speed
     const walkSpeed = parseInt(settings["walk_speed"] || "110", 10);
@@ -171,12 +162,6 @@ toggleWander.addEventListener("change", async () => {
   await emit("setting-wander", checked);
 });
 
-toggleWanderAll.addEventListener("change", async () => {
-  const checked = toggleWanderAll.checked;
-  await dbSetSetting("wander_all_monitors", String(checked));
-  await emit("setting-wander-all", checked);
-});
-
 // Walk Speed
 sliderWalkSpeed.addEventListener("input", async () => {
   const speed = parseInt(sliderWalkSpeed.value, 10);
@@ -267,50 +252,6 @@ btnModalConfirm.addEventListener("click", async () => {
     alert("Diana's memory has been reset.");
   } catch (err) {
     console.error("Failed to reset memory:", err);
-  }
-});
-
-// Backup & Restore
-btnExportBackup.addEventListener("click", async () => {
-  try {
-    const jsonStr = await dbExportAll();
-    const blob = new Blob([jsonStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const dateStr = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `diana-backup-${dateStr}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    backupStatus.textContent = "Backup exported successfully! ✨";
-    setTimeout(() => { backupStatus.textContent = ""; }, 3000);
-  } catch (err) {
-    console.error("Failed to export backup:", err);
-    backupStatus.textContent = "Export failed. Check console.";
-  }
-});
-
-btnImportBackup.addEventListener("click", () => {
-  fileImportBackup.click();
-});
-
-fileImportBackup.addEventListener("change", async () => {
-  const file = fileImportBackup.files?.[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    await dbImportAll(text);
-    await loadSettings();
-    await emit("memory-reset");
-    backupStatus.textContent = "Backup restored successfully! 🎉";
-    setTimeout(() => { backupStatus.textContent = ""; }, 3000);
-  } catch (err) {
-    console.error("Failed to import backup:", err);
-    alert("Failed to restore backup: invalid format.");
-  } finally {
-    fileImportBackup.value = "";
   }
 });
 

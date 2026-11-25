@@ -3,13 +3,12 @@ import { Mood } from "./mood";
 import { ScriptedBrain } from "./brain";
 import { Behaviors, sleep, hour, isLateNight } from "./behaviors";
 import { InputHandler } from "./input";
-import { state, setVisible, setWanderEnabled, setBreakEnabled, setQuietHours } from "./state";
-import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin, setChattiness, ChattinessLevel } from "./config";
+import { state, setVisible, setWanderEnabled } from "./state";
+import { SCALE, applyScale, setWalkSpeed, setBreakEveryMin } from "./config";
 import { spriteEl, say, syncHitRects, askInlineInput } from "./ui";
 import {
   getCurrentWorkArea,
   getWindowSize,
-  getWindowPosition,
   setWindowPosition,
   loadLocalPosition,
   onTrayAction,
@@ -23,19 +22,12 @@ import {
   dbGetAllSettings,
   onSettingScale,
   onSettingWander,
-  onSettingWanderAll,
   onSettingWalkSpeed,
   onSettingUsername,
-  onSettingChattiness,
-  onSettingBreakEnabled,
-  onSettingBreakInterval,
-  onSettingQuietHours,
   onMemoryReset,
   getUserIdleMs,
-  updateTrayTooltip,
   logDecision,
 } from "./platform";
-import { listen } from "@tauri-apps/api/event";
 
 import { ActivityMonitor } from "./activity";
 
@@ -57,15 +49,6 @@ onTrayAction((action) => {
   if (action === "dnd") activityMonitor.toggleDnd();
 });
 
-// Requirement B: "Bring Diana back" rescue from Rust tray item
-listen("bring-back", () => {
-  logDecision("bring-back event: resetting to idle from Rust rescue");
-  setVisible(true);
-  anim.resume();
-  behaviors.toIdle();
-  activityMonitor.start();
-}).catch(console.warn);
-
 onPetVisible((visible) => {
   setVisible(visible);
   logDecision(`onPetVisible: visible=${visible} (reason: user/tray visibility toggle)`);
@@ -85,8 +68,6 @@ onPetVisible((visible) => {
 // Live settings event listeners
 onSettingScale((scale) => {
   applyScale(scale);
-  // Do NOT resize the OS window here — the Tauri window is fixed at 240×328 (tauri.conf.json).
-  // Resizing on scale-change breaks Rust's floor/clamp math which uses physical pixel atomics.
   syncHitRects();
 });
 
@@ -97,40 +78,12 @@ onSettingWander((enabled) => {
   }
 });
 
-onSettingWanderAll((enabled) => {
-  state.wanderAllMonitors = enabled;
-});
-
 onSettingWalkSpeed((speed) => {
   setWalkSpeed(speed);
 });
 
 onSettingUsername((name) => {
   brain.setUserName(name);
-});
-
-onSettingChattiness((level) => {
-  setChattiness(level as ChattinessLevel);
-});
-
-onSettingBreakEnabled((enabled) => {
-  setBreakEnabled(enabled);
-});
-
-onSettingBreakInterval((mins) => {
-  setBreakEveryMin(mins);
-});
-
-onSettingQuietHours((data) => {
-  const [sh, sm] = (data.start || "23:00").split(":").map(Number);
-  const [eh, em] = (data.end || "07:00").split(":").map(Number);
-  setQuietHours({
-    enabled: data.enabled,
-    startH: sh || 0,
-    startM: sm || 0,
-    endH: eh || 0,
-    endM: em || 0,
-  });
 });
 
 onMemoryReset(async () => {
@@ -144,39 +97,6 @@ onMemoryReset(async () => {
 });
 
 let minuteClockTimer: number | undefined;
-let watchdogTimer: number | undefined;
-
-/** Issue 0 Req H: 2-second watchdog — if window drifts off-screen, snap back to floor. */
-function startWatchdog() {
-  if (watchdogTimer) clearInterval(watchdogTimer);
-  watchdogTimer = window.setInterval(async () => {
-    if (!state.visible || state.dndEnabled || state.mode === "carried" || state.mode === "falling") return;
-    try {
-      const [pos, size, wa] = await Promise.all([
-        getWindowPosition(),
-        getWindowSize(),
-        getCurrentWorkArea(),
-      ]);
-      if (!wa) return;
-      const cx = pos.x + size.width / 2;
-      const cy = pos.y + size.height / 2;
-      const onScreen =
-        cx >= wa.x - size.width &&
-        cx <= wa.x + wa.width + size.width &&
-        cy >= wa.y - size.height &&
-        cy <= wa.y + wa.height + size.height;
-      if (!onScreen) {
-        const snapX = wa.x + wa.width - size.width - Math.round(40 * wa.scaleFactor);
-        const snapY = wa.y + wa.height - size.height;
-        logDecision(
-          `watchdog: window off-screen at (${pos.x},${pos.y}) size=(${size.width},${size.height}) — snapping to (${snapX},${snapY})`
-        );
-        await setWindowPosition(snapX, snapY);
-        behaviors.toIdle();
-      }
-    } catch { /* ignore */ }
-  }, 2000);
-}
 
 function startMinuteClock() {
   if (minuteClockTimer) clearInterval(minuteClockTimer);
@@ -231,11 +151,6 @@ async function placeInitially() {
     : wa.y + wa.height - size.height;
 
   await setWindowPosition(x, y);
-
-  // Cache floor/size into state for Rust physics fallback
-  state.floorY = wa.y + wa.height;
-  state.winH = size.height;
-  state.scaleFactor = wa.scaleFactor;
 }
 
 let hasStarted = false;
@@ -251,7 +166,6 @@ async function start() {
   await placeInitially();
   anim.play("idle");
   startMinuteClock();
-  startWatchdog();
   activityMonitor.start();
 
   // 1. Initialize SQLite mood & load settings
@@ -262,41 +176,18 @@ async function start() {
   logDecision(`main.ts settings loaded: ${JSON.stringify(settings)}`);
   if (settings["scale"]) {
     const s = parseFloat(settings["scale"]);
-    if (!isNaN(s) && s > 0) {
-      applyScale(s);
-      // Do NOT call resizeWindowForScale — window is fixed at 240×328 (tauri.conf.json)
-    }
+    if (!isNaN(s) && s > 0) applyScale(s);
   }
   if (settings["wander_enabled"] !== undefined) {
     setWanderEnabled(settings["wander_enabled"] !== "false");
-  }
-  if (settings["wander_all_monitors"] !== undefined) {
-    state.wanderAllMonitors = settings["wander_all_monitors"] === "true";
   }
   if (settings["walk_speed"]) {
     const spd = parseInt(settings["walk_speed"], 10);
     if (!isNaN(spd) && spd > 0) setWalkSpeed(spd);
   }
-  if (settings["chattiness"]) {
-    setChattiness(settings["chattiness"] as ChattinessLevel);
-  }
-  if (settings["break_reminder_enabled"] !== undefined) {
-    setBreakEnabled(settings["break_reminder_enabled"] !== "false");
-  }
   if (settings["break_interval_mins"]) {
     const bim = parseInt(settings["break_interval_mins"], 10);
     if (!isNaN(bim) && bim > 0) setBreakEveryMin(bim);
-  }
-  if (settings["quiet_hours_enabled"] !== undefined) {
-    const [sh, sm] = (settings["quiet_hours_start"] || "23:00").split(":").map(Number);
-    const [eh, em] = (settings["quiet_hours_end"] || "07:00").split(":").map(Number);
-    setQuietHours({
-      enabled: settings["quiet_hours_enabled"] === "true",
-      startH: sh || 0,
-      startM: sm || 0,
-      endH: eh || 0,
-      endM: em || 0,
-    });
   }
   syncHitRects();
 
@@ -344,7 +235,6 @@ async function start() {
   // 3. Stats Summary: streaks & active hour pattern
   const stats = await dbGetStatsSummary();
   logDecision(`main.ts stats: streaks=${stats.streak_days}, pets=${stats.total_pets}, hours=${JSON.stringify(stats.top_active_hours)}`);
-  updateTrayTooltip(`Diana — Day ${Math.max(1, stats.streak_days)}`);
   const h = hour();
   const away = mood.awayMinutes;
   const greetingTrigger =

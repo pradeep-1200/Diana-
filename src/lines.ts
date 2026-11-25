@@ -48,50 +48,12 @@ export const LINES: Record<string, Line[]> = {
   pluggedIn: [L("Plugged in! Full energy coming up~", "⚡"), L("Charging! We have all the power we need now.", "✨")],
   unplugged: [L("Unplugged! Running on battery now.", "🔋"), L("On battery power! I'll keep an eye on it.", "👀")],
   welcomeBack: [L("Welcome back! I was waiting for you.", "✨"), L("You're back! Ready to get to work?", "👋"), L("Oh! You're back! Welcome~", "❤")],
-
-  // ── App focus / blur ──────────────────────────────────────────────────────
-  appBlur:    [L("I'll be right here if you need me~"), L("Go get 'em! I'll keep watch."), L("Off you go. I'll be here.")],
-  appFocus:   [L("Oh, you're back! Hi~", "✨"), L("Welcome back!"), L("There you are~ 👋")],
-
-  // ── Seasonal ─────────────────────────────────────────────────────────────
-  winter:  [L("It's so cold out... I'm glad we're cozy in here.","❄️"), L("Winter feels extra quiet today.","⛄"), L("*hugs self* Chilly!","🧊")],
-  spring:  [L("Something feels alive in the air today~","🌸"), L("Spring! Everything is blooming.","🌷"), L("I smell flowers. Do you?","🌸")],
-  summer:  [L("It's so warm today! Stay hydrated, okay?","☀️"), L("Summer energy!","🌻"), L("Hot hot hot~ Turn on a fan?","🌞")],
-  fall:    [L("Cozy season is here~","🍂"), L("I love fall! Leaves are pretty.","🍁"), L("*crunches imaginary leaf*","🍂")],
-
-  // ── Holidays ─────────────────────────────────────────────────────────────
-  halloween: [L("Boo! ...Did that work?","👻"), L("Spooky season~ 🎃"), L("If I were a ghost, I'd haunt very politely.","👻")],
-  christmas: [L("Merry Christmas! Ho ho ho~","🎄"), L("I hope you have a wonderful holiday!","✨"), L("*hums a carol quietly*","🎅")],
-  newyear:   [L("Happy New Year! Make it a great one!","🎉"), L("New year, still the same me~ ✨"), L("🎆 Fireworks!")],
-  valentine: [L("Happy Valentine's Day! 💕"), L("I appreciate you, just so you know~","❤"), L("You're my favourite person to be with~","💖")],
 };
-
-// ── Seasonal helpers ─────────────────────────────────────────────────────────
-
-export function getSeason(): "winter" | "spring" | "summer" | "fall" {
-  const m = new Date().getMonth() + 1; // 1-12
-  if (m === 12 || m <= 2) return "winter";
-  if (m <= 5) return "spring";
-  if (m <= 8) return "summer";
-  return "fall";
-}
-
-export function getHoliday(): string | null {
-  const now = new Date();
-  const m = now.getMonth() + 1;
-  const d = now.getDate();
-  if (m === 10 && d === 31) return "halloween";
-  if (m === 12 && d === 25) return "christmas";
-  if (m === 1  && d === 1)  return "newyear";
-  if (m === 2  && d === 14) return "valentine";
-  return null;
-}
 
 const lastUsed = new Map<string, number>();
 
 export function pick(key: string): Line {
-  // Bug 1 fix: fall back gracefully on unknown keys instead of crashing
-  const pool = LINES[key] ?? LINES["thoughtContent"];
+  const pool = LINES[key];
   let i = Math.floor(Math.random() * pool.length);
   if (pool.length > 1 && lastUsed.get(key) === i) i = (i + 1) % pool.length;
   lastUsed.set(key, i);

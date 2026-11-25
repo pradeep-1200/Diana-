@@ -134,10 +134,8 @@ export class ScriptedBrain implements Brain {
           default: return { key: "thoughtContent", emotion: "curious" };
         }
       }
-      case "appBlur": return { key: "appBlur", emotion: "neutral" };
-      case "appFocus": return { key: "appFocus", emotion: "happy" };
       default: {
-        return { key: ctx.trigger, emotion: "neutral" };
+        return { key: ctx.trigger in (window as unknown as { LINES?: unknown }) ? ctx.trigger : "thoughtContent", emotion: "neutral" };
       }
     }
   }

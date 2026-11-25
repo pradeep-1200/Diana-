@@ -32,22 +32,6 @@ pub struct FactRecord {
     pub updated_at: i64,
 }
 
-// Helper to convert YYYY-MM-DD into days since an arbitrary epoch (Gregorian)
-fn parse_date_to_days(d: &str) -> Option<i64> {
-    let parts: Vec<&str> = d.split('-').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let y: i64 = parts[0].parse().ok()?;
-    let m: i64 = parts[1].parse().ok()?;
-    let day: i64 = parts[2].parse().ok()?;
-
-    let m_adj = (m + 9) % 12;
-    let y_adj = y - m_adj / 10;
-    let days = 365 * y_adj + y_adj / 4 - y_adj / 100 + y_adj / 400 + (m_adj * 306 + 5) / 10 + (day - 1);
-    Some(days)
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub streak_days: i64,
@@ -56,57 +40,11 @@ pub struct StatsSummary {
     pub top_active_hours: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackupData {
-    pub mood: Option<MoodRecord>,
-    pub settings: HashMap<String, String>,
-    pub facts: Vec<FactRecord>,
-    pub stats: Option<StatsSummary>,
-}
-
 pub struct DbState {
-    pub conn: Mutex<Connection>,
+    conn: Mutex<Connection>,
 }
 
 impl DbState {
-    pub fn get_streak(&self) -> i64 {
-        if let Ok(conn) = self.conn.lock() {
-            let mut stmt = match conn.prepare("SELECT DISTINCT date FROM daily_stats WHERE active_minutes > 0 ORDER BY date DESC;") {
-                Ok(s) => s,
-                Err(_) => return 1,
-            };
-            let dates: Vec<String> = stmt
-                .query_map([], |r| r.get::<_, String>(0))
-                .map(|rows| rows.filter_map(Result::ok).collect())
-                .unwrap_or_default();
-
-            let mut streak = 0i64;
-            let mut prev_day: Option<i64> = None;
-            for d in &dates {
-                if let Some(cur) = parse_date_to_days(d) {
-                    match prev_day {
-                        None => {
-                            streak = 1;
-                            prev_day = Some(cur);
-                        }
-                        Some(p) => {
-                            if p - cur == 1 {
-                                streak += 1;
-                                prev_day = Some(cur);
-                            } else if p == cur {
-                                continue;
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            streak.max(1)
-        } else {
-            1
-        }
-    }
     pub fn new(app: &AppHandle) -> Result<Self, String> {
         let app_dir: PathBuf = app
             .path()
@@ -405,9 +343,9 @@ pub fn db_get_stats_summary(state: tauri::State<DbState>) -> Result<StatsSummary
         .query_row("SELECT COALESCE(SUM(active_minutes), 0) FROM daily_stats;", [], |r| r.get(0))
         .unwrap_or(0);
 
-    // 3. Consecutive streak days
+    // 3. Streak days: count distinct dates in sequence
     let mut stmt = conn
-        .prepare("SELECT DISTINCT date FROM daily_stats WHERE active_minutes > 0 ORDER BY date DESC;")
+        .prepare("SELECT date FROM daily_stats WHERE active_minutes > 0 ORDER BY date DESC;")
         .map_err(|e| e.to_string())?;
     let dates: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(0))
@@ -415,29 +353,7 @@ pub fn db_get_stats_summary(state: tauri::State<DbState>) -> Result<StatsSummary
         .filter_map(Result::ok)
         .collect();
 
-    let mut streak_days = 0i64;
-    let mut prev_day_num: Option<i64> = None;
-
-    for d in &dates {
-        if let Some(cur_day_num) = parse_date_to_days(d) {
-            match prev_day_num {
-                None => {
-                    streak_days = 1;
-                    prev_day_num = Some(cur_day_num);
-                }
-                Some(prev) => {
-                    if prev - cur_day_num == 1 {
-                        streak_days += 1;
-                        prev_day_num = Some(cur_day_num);
-                    } else if prev == cur_day_num {
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    let streak_days = dates.len() as i64; // simple streak representation
 
     // 4. Top active hours
     let mut hour_stmt = conn
@@ -512,58 +428,6 @@ pub fn db_import_local_storage(
                 params![p],
             );
         }
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn db_export_all(state: tauri::State<DbState>) -> Result<String, String> {
-    let mood = db_get_mood(state.clone())?;
-    let settings = db_get_all_settings(state.clone())?;
-    let stats = db_get_stats_summary(state.clone()).ok();
-
-    let conn = state.conn.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT key, value, source, updated_at FROM facts;")
-        .map_err(|e| e.to_string())?;
-    let facts: Vec<FactRecord> = stmt
-        .query_map([], |r| {
-            Ok(FactRecord {
-                key: r.get(0)?,
-                value: r.get(1)?,
-                source: r.get(2)?,
-                updated_at: r.get(3)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(Result::ok)
-        .collect();
-
-    let backup = BackupData {
-        mood,
-        settings,
-        facts,
-        stats,
-    };
-
-    serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn db_import_all(state: tauri::State<DbState>, json: String) -> Result<(), String> {
-    let backup: BackupData = serde_json::from_str(&json).map_err(|e| format!("Invalid backup JSON: {}", e))?;
-
-    if let Some(m) = backup.mood {
-        db_save_mood(state.clone(), m)?;
-    }
-
-    for (k, v) in backup.settings {
-        db_set_setting(state.clone(), k, v)?;
-    }
-
-    for f in backup.facts {
-        db_set_fact(state.clone(), f.key, f.value, f.source)?;
     }
 
     Ok(())
